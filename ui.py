@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.106）:
-# - Nパネルをセクション分割し、折りたたみと並び替えに対応
-# - 位置 / 記録・読込 / 画像送り / 下絵 / ドリーズーム / 設定他 の既定順へ再編成
+# 変更点（1.113）:
+# - バージョン更新に追従
+# - UI表示と操作は現状維持
 
 import bpy
 
@@ -162,6 +162,9 @@ def _draw_saved_memo_controls(layout, context):
 
     _sync_scene_saved_memo(scene, manager)
     box.prop(scene, 'saved_memo_text', text="")
+    row = box.row()
+    row.scale_y = 1.4
+    row.operator("camera.save_selected_stock_memo", text="メモ記録")
 
 
 def _draw_cycle_controls(layout, context):
@@ -386,5 +389,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.106
+# Version Footer: 1.113
 # -------------------------------

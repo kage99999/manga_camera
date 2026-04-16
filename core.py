@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.106）:
-# - ドリーズーム有効中の焦点距離手動入力を無効化
-# - ストック適用処理の例外整理とUI/機能の現状維持
+# 変更点（1.113）:
+# - メモ記録を条件付き上書きへ調整
+# - 上書き条件外では通常記録へフォールバック
+# - UIと機能は現状維持
 
 import bpy
 import os
@@ -12,15 +13,45 @@ import json
 import time
 import subprocess
 import unicodedata
-import re
 from bpy.app.handlers import persistent
+
+from .background import (
+    _apply_background_display_settings,
+    _apply_saved_background_to_camera,
+    _find_next_folder_image_path,
+    _frame_from_filename_path,
+    _get_or_create_background_slot,
+    _load_image_safe,
+    _set_background_image_from_path,
+    _set_background_visibility,
+)
+from .storage import (
+    _ENUM_CACHE,
+    _append_unique_saved_items,
+    _default_json_dialog_filepath,
+    _ensure_manager_saved_data_normalized,
+    _find_matching_saved_item_index,
+    _get_saved_item_safe,
+    _normalize_saved_item,
+    _normalize_saved_list,
+    _safe_existing_dirpath,
+    _safe_json_path,
+    _safe_saved_index,
+    _saved_value,
+    _set_saved_camera_index_safe as _storage_set_saved_camera_index_safe,
+    _sync_scene_saved_memo,
+    _write_json_atomic,
+    ensure_valid_saved_enum,
+    rebuild_enum_cache,
+    safe_basename,
+)
 
 # =========================
 # バージョン文字列（UI表示用）
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 103)  # 1.106
+    v = (1, 0, 113)  # 1.113
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -40,63 +71,6 @@ _POSTLOAD_FIX_PENDING = False
 # =========================
 # 内部ユーティリティ
 # =========================
-_ENUM_CACHE: list[tuple[str, str, str]] = []  # プルダウン用キャッシュ
-
-def rebuild_enum_cache(manager) -> None:
-    """ストック名（日本語対応済み）でEnumを再構築"""
-    global _ENUM_CACHE
-    items = []
-    for i, data in enumerate(manager.saved_camera_data):
-        name = unicodedata.normalize("NFC", str(data.get('bg_image', 'No File')))
-        label = f"{i + 1}: {name}"
-        items.append((str(i), label, ""))
-    _ENUM_CACHE = items
-
-def safe_basename(filepath: str) -> str:
-    """パスからファイル名を取得（NFC正規化・日本語対応）"""
-    if not filepath:
-        return "No File"
-    try:
-        full = bpy.path.abspath(filepath)
-    except Exception:
-        full = filepath
-    full = bpy.path.native_pathsep(full)
-    name = os.path.basename(full)
-    return unicodedata.normalize("NFC", str(name))
-
-
-def _normalize_dirpath(dirpath: str) -> str:
-    """ディレクトリ文字列をOS向けに正規化"""
-    try:
-        return bpy.path.native_pathsep(bpy.path.abspath(dirpath))
-    except Exception:
-        return bpy.path.native_pathsep(dirpath or "")
-
-
-def _safe_existing_dirpath(dirpath: str, fallback: str = None) -> str:
-    """存在するディレクトリだけを返し、無効ならフォールバックへ寄せる"""
-    base = fallback if fallback is not None else os.path.expanduser("~")
-    candidate = _normalize_dirpath(dirpath or "")
-    if candidate and os.path.isdir(candidate):
-        return candidate
-    base = _normalize_dirpath(base or os.path.expanduser("~"))
-    if base and os.path.isdir(base):
-        return base
-    return os.path.expanduser("~")
-
-
-def _safe_json_path(filepath: str, fallback_filename: str = "camera_positions.json") -> str:
-    """保存先JSONパスを安全な場所へ補正する"""
-    try:
-        path = bpy.path.native_pathsep(bpy.path.abspath(filepath or ""))
-    except Exception:
-        path = bpy.path.native_pathsep(filepath or "")
-    if not path:
-        return os.path.join(bpy.utils.user_resource('CONFIG'), fallback_filename)
-    root, ext = os.path.splitext(path)
-    if not ext:
-        path = path + '.json'
-    return path
 
 def _is_timer_registered(func) -> bool:
     """Blenderタイマー登録済み判定を安全に行う"""
@@ -118,464 +92,7 @@ def _register_timer_once(func, first_interval: float = 0.0) -> bool:
         return False
 
 
-def _default_json_dialog_filepath(manager, fallback_filename: str = "camera_positions.json") -> str:
-    """ファイルブラウザ用の初期JSONパスを安全に組み立てる"""
-    base_path = _safe_json_path(getattr(manager, 'save_file_path', ''))
-    if base_path and os.path.splitext(base_path)[1].lower() == '.json':
-        return base_path
 
-    default_dir = _safe_existing_dirpath(
-        getattr(manager, 'output_folder_path', ''),
-        fallback=os.path.expanduser("~"),
-    )
-    return os.path.join(default_dir, fallback_filename)
-
-
-def _write_json_atomic(filepath: str, data: dict) -> None:
-    """JSONをテンポラリ経由で安全に保存する"""
-    path = _safe_json_path(filepath)
-    folder = os.path.dirname(path) or bpy.utils.user_resource('CONFIG')
-    os.makedirs(folder, exist_ok=True)
-    tmp_path = path + '.tmp'
-    with open(tmp_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp_path, path)
-
-
-def _resolve_bg_image_path(manager, filename: str) -> str:
-    """保存済みファイル名と現在の読込フォルダから実ファイルパスを組み立てる"""
-    fname = unicodedata.normalize("NFC", str(filename or "")).strip()
-    if not fname or fname == "No File":
-        return ""
-    dirpath = _normalize_dirpath(getattr(manager, "background_image_folder_path", ""))
-    if not dirpath:
-        return ""
-    return os.path.join(dirpath, fname)
-
-
-def _load_image_safe(filepath: str):
-    """同一画像の重複読込を避けつつ画像を取得する"""
-    if not filepath:
-        return None
-    try:
-        abs_path = bpy.path.abspath(filepath)
-    except Exception:
-        abs_path = filepath
-    abs_path = bpy.path.native_pathsep(abs_path)
-    if not abs_path or not os.path.exists(abs_path):
-        return None
-    try:
-        return bpy.data.images.load(abs_path, check_existing=True)
-    except TypeError:
-        # 古い環境向けフォールバック
-        pass
-    except Exception:
-        return None
-
-    norm_target = os.path.normcase(os.path.normpath(abs_path))
-    for img in bpy.data.images:
-        try:
-            existing = bpy.path.native_pathsep(bpy.path.abspath(img.filepath))
-        except Exception:
-            existing = getattr(img, "filepath", "")
-        if existing and os.path.normcase(os.path.normpath(existing)) == norm_target:
-            return img
-    try:
-        return bpy.data.images.load(abs_path)
-    except Exception:
-        return None
-
-
-def _natural_sort_key(value: str):
-    """ファイル名の自然順ソート用キー"""
-    s = unicodedata.normalize("NFC", str(value or ""))
-    return [int(part) if part.isdigit() else part.casefold() for part in re.split(r'(\d+)', s)]
-
-
-def _iter_folder_image_paths(dirpath: str):
-    """指定フォルダ内の画像ファイルを自然順で返す"""
-    path = _safe_existing_dirpath(dirpath, fallback="")
-    if not path or not os.path.isdir(path):
-        return []
-    exts = {'.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff', '.bmp'}
-    items = []
-    try:
-        for name in os.listdir(path):
-            full = os.path.join(path, name)
-            if not os.path.isfile(full):
-                continue
-            if os.path.splitext(name)[1].lower() not in exts:
-                continue
-            items.append(full)
-    except Exception:
-        return []
-    items.sort(key=lambda fp: _natural_sort_key(os.path.basename(fp)))
-    return items
-
-
-def _stocked_bg_name_set(manager):
-    """保存ストックに登録済みの下絵ファイル名セット"""
-    result = set()
-    for item in _ensure_manager_saved_data_normalized(manager):
-        try:
-            name = safe_basename(_saved_value(item, 'bg_image', ''))
-        except Exception:
-            name = ''
-        if name and name != 'No File':
-            result.add(unicodedata.normalize('NFC', name).casefold())
-    return result
-
-
-def _frame_from_filename_path(path: str):
-    """ファイル名末尾6桁の数字を現在フレーム用に返す"""
-    try:
-        base = os.path.basename(path)
-        name, _ext = os.path.splitext(base)
-        tail = name[-6:]
-        return int(tail) if tail.isdigit() else None
-    except Exception:
-        return None
-
-
-def _set_background_image_from_path(scene, camera, manager, filepath: str, update_resolution: bool = False, update_frame: bool = False):
-    """画像パスから現在のカメラ下絵だけを切り替える"""
-    if not scene or not camera or not getattr(camera, 'data', None):
-        raise RuntimeError('カメラがありません')
-    image = _load_image_safe(filepath)
-    if image is None:
-        raise RuntimeError('画像ファイルが見つからないか、読み込めませんでした')
-    bg = _get_or_create_background_slot(camera)
-    if bg is None:
-        raise RuntimeError('下絵スロットを作成できませんでした')
-    bg.image = image
-    try:
-        bg.display_depth = 'FRONT'
-    except Exception:
-        pass
-    _set_background_visibility(camera, bg, True)
-    if update_resolution:
-        try:
-            if image.size[0] > 0 and image.size[1] > 0:
-                scene.render.resolution_x = image.size[0]
-                scene.render.resolution_y = image.size[1]
-        except Exception:
-            pass
-    if update_frame:
-        try:
-            fnum = _frame_from_filename_path(filepath)
-            if fnum is not None:
-                scene.frame_set(int(fnum))
-        except Exception:
-            pass
-    manager.background_image_folder_path = _safe_existing_dirpath(os.path.dirname(filepath), fallback=manager.background_image_folder_path)
-    try:
-        manager.save_data()
-    except Exception:
-        pass
-    _tag_redraw_all_areas()
-    return image
-
-
-def _find_next_folder_image_path(manager, current_name: str = '', step: int = 1, skip_stocked: bool = False):
-    """読込場所設定フォルダから次/前に読む画像を探す"""
-    paths = _iter_folder_image_paths(getattr(manager, 'background_image_folder_path', ''))
-    if not paths:
-        return '', 0
-
-    if skip_stocked:
-        stocked = _stocked_bg_name_set(manager)
-        filtered = [p for p in paths if unicodedata.normalize('NFC', os.path.basename(p)).casefold() not in stocked]
-        paths = filtered
-        if not paths:
-            return '', 0
-
-    names = [unicodedata.normalize('NFC', os.path.basename(p)) for p in paths]
-    cur = unicodedata.normalize('NFC', str(current_name or ''))
-    if cur in names:
-        idx = names.index(cur)
-        next_idx = (idx + (1 if step >= 0 else -1)) % len(paths)
-        return paths[next_idx], len(paths)
-
-    return paths[0], len(paths)
-
-
-def _get_or_create_background_slot(camera):
-    """先頭の下絵スロットを安全に取得"""
-    if not camera or not getattr(camera, "data", None):
-        return None
-    try:
-        slots = camera.data.background_images
-    except Exception:
-        return None
-    try:
-        if slots and len(slots) > 0:
-            return slots[0]
-    except Exception:
-        pass
-    try:
-        return slots.new()
-    except Exception:
-        return None
-
-
-def _set_background_visibility(camera, bg, visible: bool = True) -> None:
-    """カメラ側とスロット側の下絵表示をまとめて同期"""
-    v = bool(visible)
-    if camera and getattr(camera, "data", None):
-        try:
-            camera.data.show_background_images = v
-        except Exception:
-            pass
-        try:
-            camera.data.mpm_bg_visible = v
-        except Exception:
-            pass
-    if bg is not None:
-        try:
-            if hasattr(bg, 'show_background_image'):
-                bg.show_background_image = v
-        except Exception:
-            pass
-
-
-def _apply_background_display_settings(bg, data) -> None:
-    """不透明度と深度だけを安全に反映"""
-    if bg is None:
-        return
-    bg_opacity = data.get('bg_opacity', 1.0) if isinstance(data, dict) else 1.0
-    try:
-        if hasattr(bg, "opacity"):
-            bg.opacity = float(bg_opacity)
-        elif hasattr(bg, "alpha"):
-            bg.alpha = float(bg_opacity)
-    except Exception:
-        pass
-    try:
-        bg.display_depth = str(data.get('bg_depth', 'BACK')) if isinstance(data, dict) else 'BACK'
-    except Exception:
-        pass
-
-
-def _apply_saved_background_to_camera(camera, manager, data) -> None:
-    """保存済み下絵情報をカメラへ復元する"""
-    bg = _get_or_create_background_slot(camera)
-    if bg is None:
-        return
-
-    image_path = _resolve_bg_image_path(manager, data.get('bg_image', ""))
-    image = _load_image_safe(image_path) if image_path else None
-    bg.image = image
-    _apply_background_display_settings(bg, data if isinstance(data, dict) else {})
-    # 画像が見つからなくても、UI上の表示設定は保持しておく
-    _set_background_visibility(camera, bg, bool(image is not None or data.get('bg_image', '') not in ('', 'No File')))
-
-def _stock_signature(item: dict) -> tuple:
-    """ストック1件の「同一判定用」シグネチャを作る（created_at は無視する）
-    完全一致判定なので、値はそのままタプル化して比較する。
-    """
-    if not isinstance(item, dict):
-        return tuple()
-
-    # list/tuple の混在を避けて、必ず tuple にそろえる
-    pos = tuple(item.get("position", ()))
-    rot = tuple(item.get("rotation", ()))
-
-    # それ以外は素直に取得（None も含めて完全一致扱い）
-    return (
-        pos,
-        rot,
-        item.get("resolution_x"),
-        item.get("resolution_y"),
-        item.get("focal_length"),
-        item.get("bg_image"),
-        item.get("bg_opacity"),
-        item.get("bg_depth"),
-        item.get("frame_current"),
-    )
-
-def _append_unique_saved_items(existing_items, incoming_items):
-    """既存配列へ完全同一データを除外しながら追加する。
-    返り値: (追加後リスト, added_count, skipped_count)
-    """
-    base = list(_normalize_saved_list(existing_items))
-    incoming = _normalize_saved_list(incoming_items)
-
-    seen = set()
-    result = []
-    for item in base:
-        sig = _stock_signature(item)
-        result.append(item)
-        if sig:
-            seen.add(sig)
-
-    added_count = 0
-    skipped_count = 0
-    for item in incoming:
-        sig = _stock_signature(item)
-        if sig and sig in seen:
-            skipped_count += 1
-            continue
-        result.append(item)
-        added_count += 1
-        if sig:
-            seen.add(sig)
-
-    return result, added_count, skipped_count
-
-
-def _find_matching_saved_item_index(manager, new_item) -> int:
-    """memo を除いた保存設定が一致する既存ストックの添字を返す。
-    一致がなければ -1。
-    """
-    try:
-        target_sig = _stock_signature(_normalize_saved_item(new_item))
-    except Exception:
-        target_sig = None
-    if not target_sig:
-        return -1
-    items = _ensure_manager_saved_data_normalized(manager)
-    for i, item in enumerate(items):
-        try:
-            sig = _stock_signature(item)
-        except Exception:
-            sig = None
-        if sig == target_sig:
-            return i
-    return -1
-
-def ensure_valid_saved_enum(scene, manager):
-    """無効なインデックスを0へ補正"""
-    try:
-        n = len(manager.saved_camera_data)
-    except Exception:
-        n = 0
-    if n <= 0:
-        return
-    valid_ids = {str(i) for i in range(n)}
-    cur = getattr(scene, "saved_camera_index", None)
-    if cur not in valid_ids:
-        scene.saved_camera_index = "0"
-
-
-def _saved_value(data: dict, key: str, default=None):
-    """壊れたJSONや旧データでも安全に値を取り出す"""
-    if not isinstance(data, dict):
-        return default
-    value = data.get(key, default)
-    return default if value is None else value
-
-
-def _normalize_saved_item(item) -> dict:
-    """保存1件を現行仕様の最低限の辞書へ正規化する"""
-    if not isinstance(item, dict):
-        item = {}
-
-    def _vec3(value, fallback):
-        try:
-            seq = list(value)
-        except Exception:
-            return list(fallback)
-        if len(seq) < 3:
-            seq = seq + list(fallback)[len(seq):3]
-        try:
-            return [float(seq[0]), float(seq[1]), float(seq[2])]
-        except Exception:
-            return list(fallback)
-
-    out = {
-        'position': _vec3(item.get('position', (0.0, 0.0, 0.0)), (0.0, 0.0, 0.0)),
-        'rotation': _vec3(item.get('rotation', (0.0, 0.0, 0.0)), (0.0, 0.0, 0.0)),
-        'resolution_x': int(item.get('resolution_x', 1920) or 1920),
-        'resolution_y': int(item.get('resolution_y', 1080) or 1080),
-        'focal_length': float(item.get('focal_length', 50.0) or 50.0),
-        'bg_image': unicodedata.normalize('NFC', str(item.get('bg_image', 'No File') or 'No File')),
-        'bg_opacity': float(item.get('bg_opacity', 1.0) or 1.0),
-        'bg_depth': str(item.get('bg_depth', 'BACK') or 'BACK'),
-        'frame_current': int(item.get('frame_current', 1) or 1),
-        'memo': str(item.get('memo', '') or ''),
-    }
-    if 'created_at' in item:
-        out['created_at'] = item.get('created_at')
-    return out
-
-
-def _normalize_saved_list(items) -> list:
-    """保存配列全体を安全な形にそろえる"""
-    if not isinstance(items, list):
-        return []
-    normalized = []
-    for item in items:
-        try:
-            normalized.append(_normalize_saved_item(item))
-        except Exception:
-            normalized.append(_normalize_saved_item({}))
-    return normalized
-
-def _ensure_manager_saved_data_normalized(manager) -> list:
-    """manager内の保存配列をその場で正規化して返す"""
-    if manager is None:
-        return []
-    try:
-        current = getattr(manager, 'saved_camera_data', [])
-    except Exception:
-        current = []
-    normalized = _normalize_saved_list(current)
-    try:
-        manager.saved_camera_data = normalized
-    except Exception:
-        pass
-    return normalized
-
-
-def _get_saved_item_safe(manager, index: int, default=None):
-    """保存配列から1件を安全取得する"""
-    items = _ensure_manager_saved_data_normalized(manager)
-    try:
-        idx = int(index)
-    except Exception:
-        return default
-    if 0 <= idx < len(items):
-        return items[idx]
-    return default
-
-
-def _safe_saved_index(scene, manager, default=0) -> int:
-    """Enum文字列や壊れた値から安全に保存インデックスを得る"""
-    try:
-        n = len(getattr(manager, 'saved_camera_data', []) or [])
-    except Exception:
-        n = 0
-    if n <= 0:
-        return 0
-    try:
-        idx = int(getattr(scene, 'saved_camera_index', str(default)) or default)
-    except Exception:
-        idx = int(default)
-    if idx < 0:
-        idx = 0
-    if idx >= n:
-        idx = n - 1
-    return idx
-
-
-def _sync_scene_saved_memo(scene, manager) -> None:
-    """現在選択中の保存ストックに紐づく摘要メモを Scene 側へ同期する"""
-    try:
-        items = _ensure_manager_saved_data_normalized(manager)
-    except Exception:
-        items = []
-    memo_text = ""
-    if items:
-        idx = _safe_saved_index(scene, manager)
-        data = _get_saved_item_safe(manager, idx, default={}) or {}
-        try:
-            memo_text = str(_saved_value(data, 'memo', '') or '')
-        except Exception:
-            memo_text = ""
-    try:
-        scene.saved_memo_text = memo_text
-    except Exception:
-        pass
 
 def _tag_redraw_all_areas() -> None:
     """保存ストック周辺のUI表示ズレを減らすため、開いているエリアを再描画する"""
@@ -598,30 +115,7 @@ def _tag_redraw_all_areas() -> None:
 
 def _set_saved_camera_index_safe(scene, manager, index: int | None = 0) -> None:
     """保存ストックのEnum値を安全に更新し、必要な再描画を行う"""
-    try:
-        total = len(getattr(manager, 'saved_camera_data', []) or [])
-    except Exception:
-        total = 0
-
-    if total <= 0:
-        try:
-            scene.saved_camera_index = "0"
-        except Exception:
-            pass
-        _tag_redraw_all_areas()
-        return
-
-    try:
-        idx = 0 if index is None else int(index)
-    except Exception:
-        idx = 0
-    idx = max(0, min(idx, total - 1))
-
-    try:
-        scene.saved_camera_index = str(idx)
-    except Exception:
-        pass
-    _tag_redraw_all_areas()
+    _storage_set_saved_camera_index_safe(scene, manager, _tag_redraw_all_areas, index)
 
 
 def _apply_saved_camera_data(scene, camera, manager, data) -> None:
@@ -928,6 +422,61 @@ class OBJECT_OT_recall_camera_position(bpy.types.Operator):
         self.report({'INFO'}, "最新のカメラ位置を呼び出しました")
         return {'FINISHED'}
 
+
+def _build_current_camera_saved_item(scene, camera) -> dict:
+    bg_image = "No File"
+    bg_opacity = 1.0
+    bg_depth = 'BACK'
+    if camera.data.background_images:
+        for bg in camera.data.background_images:
+            if bg.image:
+                bg_image = safe_basename(bg.image.filepath)
+                bg_opacity = getattr(bg, "opacity", getattr(bg, "alpha", 1.0))
+                bg_depth = bg.display_depth
+                break
+
+    return {
+        'position': list(camera.location),
+        'rotation': list(camera.rotation_euler),
+        'resolution_x': scene.render.resolution_x,
+        'resolution_y': scene.render.resolution_y,
+        'focal_length': camera.data.lens,
+        'bg_image': bg_image,
+        'bg_opacity': bg_opacity,
+        'bg_depth': bg_depth,
+        'frame_current': int(scene.frame_current),
+        'memo': str(getattr(scene, 'saved_memo_text', '') or ''),
+        'created_at': float(time.time()),
+    }
+
+
+def _save_current_item_as_stock(scene, manager, new_item, overwrite_index: int | None = None):
+    memo_text = str(new_item.get('memo', '') or '')
+    saved_items = _ensure_manager_saved_data_normalized(manager)
+
+    if overwrite_index is not None and 0 <= overwrite_index < len(saved_items):
+        existing = dict(saved_items[overwrite_index])
+        if 'created_at' in existing:
+            new_item['created_at'] = existing.get('created_at')
+        manager.saved_camera_data[overwrite_index] = _normalize_saved_item(new_item)
+        manager.save_data()
+        rebuild_enum_cache(manager)
+        _set_saved_camera_index_safe(scene, manager, overwrite_index)
+        return 'overwrite'
+
+    match_index = _find_matching_saved_item_index(manager, new_item)
+    if match_index >= 0:
+        existing = saved_items[match_index]
+        same_memo = str(_saved_value(existing, 'memo', '') or '') == memo_text
+        if same_memo:
+            return 'skip'
+
+    manager.saved_camera_data.append(_normalize_saved_item(new_item))
+    manager.save_data()
+    rebuild_enum_cache(manager)
+    _set_saved_camera_index_safe(scene, manager, len(manager.saved_camera_data) - 1)
+    return 'append'
+
 class OBJECT_OT_save_camera_position(bpy.types.Operator):
     bl_idname = "camera.save_position"
     bl_label = "カメラ位置を保存"
@@ -937,64 +486,73 @@ class OBJECT_OT_save_camera_position(bpy.types.Operator):
         camera = scene.camera
         manager = get_camera_data_manager()
         if camera:
-            position = list(camera.location)
-            rotation = list(camera.rotation_euler)
-            resolution_x = scene.render.resolution_x
-            resolution_y = scene.render.resolution_y
-            focal_length = camera.data.lens
-            bg_image = "No File"
-            bg_opacity = 1.0
-            bg_depth = 'BACK'
-            if camera.data.background_images:
-                for bg in camera.data.background_images:
-                    if bg.image:
-                        bg_image = safe_basename(bg.image.filepath)
-                        bg_opacity = getattr(bg, "opacity", getattr(bg, "alpha", 1.0))
-                        bg_depth = bg.display_depth
-                        break
-            frame_current = int(scene.frame_current)
-
-            memo_text = str(getattr(scene, 'saved_memo_text', '') or '')
-
-            new_item = {
-                'position': position,
-                'rotation': rotation,
-                'resolution_x': resolution_x,
-                'resolution_y': resolution_y,
-                'focal_length': focal_length,
-                'bg_image': bg_image,
-                'bg_opacity': bg_opacity,
-                'bg_depth': bg_depth,
-                'frame_current': frame_current,
-                'memo': memo_text,
-                'created_at': float(time.time()),
-            }
-
-            saved_items = _ensure_manager_saved_data_normalized(manager)
-            match_index = _find_matching_saved_item_index(manager, new_item)
-            if match_index >= 0:
-                existing = saved_items[match_index]
-                same_memo = str(_saved_value(existing, 'memo', '') or '') == memo_text
-                if same_memo:
-                    self.report({'INFO'}, "同じ設定・同じ摘要メモのため記録しませんでした")
-                    return {'CANCELLED'}
-                replaced = dict(new_item)
-                if 'created_at' in existing:
-                    replaced['created_at'] = existing.get('created_at')
-                manager.saved_camera_data[match_index] = _normalize_saved_item(replaced)
-                manager.save_data()
-                rebuild_enum_cache(manager)
-                _set_saved_camera_index_safe(scene, manager, match_index)
-                self.report({'INFO'}, "摘要メモを含めて保存データを上書きしました")
-                return {'FINISHED'}
-
-            manager.saved_camera_data.append(_normalize_saved_item(new_item))
-            manager.save_data()
-            rebuild_enum_cache(manager)
-            _set_saved_camera_index_safe(scene, manager, len(manager.saved_camera_data) - 1)
+            new_item = _build_current_camera_saved_item(scene, camera)
+            result = _save_current_item_as_stock(scene, manager, new_item)
+            if result == 'skip':
+                self.report({'INFO'}, "同じ設定・同じ摘要メモのため記録しませんでした")
+                return {'CANCELLED'}
             self.report({'INFO'}, "カメラ位置を保存しました")
         else:
             self.report({'WARNING'}, "カメラが選択されていません")
+        return {'FINISHED'}
+
+
+class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
+    bl_idname = "camera.save_selected_stock_memo"
+    bl_label = "摘要メモを保存"
+
+    def execute(self, context):
+        scene = context.scene
+        camera = scene.camera
+        manager = get_camera_data_manager()
+        if not camera:
+            self.report({'WARNING'}, "カメラが選択されていません")
+            return {'CANCELLED'}
+
+        saved_items = _ensure_manager_saved_data_normalized(manager)
+        if not saved_items:
+            self.report({'WARNING'}, "記録データがありません")
+            return {'CANCELLED'}
+
+        index = _safe_saved_index(scene, manager)
+        if not (0 <= index < len(saved_items)):
+            self.report({'WARNING'}, "無効なストックです")
+            return {'CANCELLED'}
+
+        current_item = _build_current_camera_saved_item(scene, camera)
+        existing = dict(saved_items[index])
+        existing_normalized = _normalize_saved_item(existing)
+        current_normalized = _normalize_saved_item(current_item)
+        if existing_normalized == current_normalized:
+            self.report({'INFO'}, "同じ設定・同じ摘要メモのためメモ記録しませんでした")
+            return {'CANCELLED'}
+        existing_memo = str(_saved_value(existing_normalized, 'memo', '') or '')
+        current_memo = str(_saved_value(current_normalized, 'memo', '') or '')
+
+        same_stock_except_memo = (
+            tuple(existing_normalized.get('position', ())) == tuple(current_normalized.get('position', ()))
+            and tuple(existing_normalized.get('rotation', ())) == tuple(current_normalized.get('rotation', ()))
+            and existing_normalized.get('resolution_x') == current_normalized.get('resolution_x')
+            and existing_normalized.get('resolution_y') == current_normalized.get('resolution_y')
+            and existing_normalized.get('focal_length') == current_normalized.get('focal_length')
+            and existing_normalized.get('bg_image') == current_normalized.get('bg_image')
+            and existing_normalized.get('frame_current') == current_normalized.get('frame_current')
+            and existing_memo != current_memo
+        )
+
+        result = _save_current_item_as_stock(
+            scene,
+            manager,
+            current_item,
+            overwrite_index=index if same_stock_except_memo else None,
+        )
+        if result == 'skip':
+            self.report({'INFO'}, "同じ設定・同じ摘要メモのためメモ記録しませんでした")
+            return {'CANCELLED'}
+        if result == 'overwrite':
+            self.report({'INFO'}, "選択中ストックへ摘要メモを上書き保存しました")
+        else:
+            self.report({'INFO'}, "カメラ位置を保存しました")
         return {'FINISHED'}
 
 class OBJECT_OT_delete_camera_position(bpy.types.Operator):
@@ -1566,7 +1124,8 @@ class OBJECT_OT_prev_folder_image(bpy.types.Operator):
                 self.report({'WARNING'}, '読み込める画像がありません')
             return {'CANCELLED'}
         try:
-            _set_background_image_from_path(scene, camera, manager, path, update_resolution=True, update_frame=True)
+            _set_background_image_from_path(scene, camera, manager, path, _tag_redraw_all_areas, update_resolution=True, update_frame=True)
+            scene.saved_memo_text = ""
         except Exception as e:
             self.report({'ERROR'}, f'画像送りに失敗: {e}')
             return {'CANCELLED'}
@@ -1607,7 +1166,8 @@ class OBJECT_OT_next_folder_image(bpy.types.Operator):
                 self.report({'WARNING'}, '読み込める画像がありません')
             return {'CANCELLED'}
         try:
-            _set_background_image_from_path(scene, camera, manager, path, update_resolution=True, update_frame=True)
+            _set_background_image_from_path(scene, camera, manager, path, _tag_redraw_all_areas, update_resolution=True, update_frame=True)
+            scene.saved_memo_text = ""
         except Exception as e:
             self.report({'ERROR'}, f'画像送りに失敗: {e}')
             return {'CANCELLED'}
@@ -1854,6 +1414,7 @@ CLASSES = (
     OBJECT_OT_select_camera_data,
     OBJECT_OT_recall_camera_position,
     OBJECT_OT_save_camera_position,
+    OBJECT_OT_save_selected_stock_memo,
     OBJECT_OT_delete_camera_position,
     OBJECT_OT_set_camera_location_zero,
     OBJECT_OT_set_camera_rotation_snap,
@@ -2011,5 +1572,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.106
+# Version Footer: 1.113
 # -------------------------------
