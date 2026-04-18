@@ -184,6 +184,7 @@
 
 - ストックデータは JSON で保存する。
 - 既定保存先は Blender の user config 配下 `camera_positions.json` とする。
+- `ストックデータを保存` の初期ファイル名は、現在の読込場所フォルダの末尾名を使い、`フォルダ名_3D座標データ_[YYYY_MMDD].json` 形式とする。
 - JSON の最上位は以下を持つ。
   - `camera_data`
   - `output_folder_path`

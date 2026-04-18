@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.113）:
-# - メモ記録を条件付き上書きへ調整
-# - 上書き条件外では通常記録へフォールバック
+# 変更点（1.114）:
+# - ストック保存ダイアログの初期ファイル名を読込場所ベースへ変更
+# - 日付付きJSON名を自動生成
 # - UIと機能は現状維持
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 113),
+    "version": (1, 0, 114),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -29,5 +29,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.113
+# Version Footer: 1.114
 # -------------------------------

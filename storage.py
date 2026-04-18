@@ -6,6 +6,7 @@
 import json
 import os
 import unicodedata
+from datetime import datetime
 
 import bpy
 
@@ -64,10 +65,18 @@ def _safe_json_path(filepath: str, fallback_filename: str = "camera_positions.js
 
 def _default_json_dialog_filepath(manager, fallback_filename: str = "camera_positions.json") -> str:
     base_path = _safe_json_path(getattr(manager, 'save_file_path', ''))
-    if base_path and os.path.splitext(base_path)[1].lower() == '.json':
-        return base_path
     default_dir = _safe_existing_dirpath(getattr(manager, 'output_folder_path', ''), fallback=os.path.expanduser("~"))
-    return os.path.join(default_dir, fallback_filename)
+    folder_path = _safe_existing_dirpath(
+        getattr(manager, 'background_image_folder_path', ''),
+        fallback=default_dir,
+    )
+    folder_name = os.path.basename(folder_path.rstrip("\\/")) if folder_path else ""
+    folder_name = unicodedata.normalize("NFC", str(folder_name or "")).strip()
+    if not folder_name:
+        folder_name = "camera_positions"
+    today_label = datetime.now().strftime("%Y_%m%d")
+    filename = f"{folder_name}_3D座標データ_[{today_label}].json"
+    return os.path.join(default_dir, filename)
 
 
 def _write_json_atomic(filepath: str, data: dict) -> None:
