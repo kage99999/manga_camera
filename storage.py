@@ -102,6 +102,18 @@ def _resolve_bg_image_path(manager, filename: str) -> str:
 def _stock_signature(item: dict) -> tuple:
     if not isinstance(item, dict):
         return tuple()
+    selected_objects = []
+    for obj in item.get("selected_objects", ()) or ():
+        if not isinstance(obj, dict):
+            continue
+        selected_objects.append(
+            (
+                obj.get("name"),
+                tuple(obj.get("location", ())),
+                tuple(obj.get("rotation", ())),
+                tuple(obj.get("scale", ())),
+            )
+        )
     return (
         tuple(item.get("position", ())),
         tuple(item.get("rotation", ())),
@@ -112,6 +124,8 @@ def _stock_signature(item: dict) -> tuple:
         item.get("bg_opacity"),
         item.get("bg_depth"),
         item.get("frame_current"),
+        bool(item.get("record_selected_objects", False)),
+        tuple(selected_objects),
     )
 
 
@@ -149,7 +163,20 @@ def _normalize_saved_item(item) -> dict:
         'bg_depth': str(item.get('bg_depth', 'BACK') or 'BACK'),
         'frame_current': int(item.get('frame_current', 1) or 1),
         'memo': str(item.get('memo', '') or ''),
+        'record_selected_objects': bool(item.get('record_selected_objects', False)),
+        'selected_objects': [],
     }
+    selected_objects = item.get('selected_objects', [])
+    if isinstance(selected_objects, list):
+        for obj in selected_objects:
+            if not isinstance(obj, dict):
+                continue
+            out['selected_objects'].append({
+                'name': str(obj.get('name', '') or ''),
+                'location': _vec3(obj.get('location', (0.0, 0.0, 0.0)), (0.0, 0.0, 0.0)),
+                'rotation': _vec3(obj.get('rotation', (0.0, 0.0, 0.0)), (0.0, 0.0, 0.0)),
+                'scale': _vec3(obj.get('scale', (1.0, 1.0, 1.0)), (1.0, 1.0, 1.0)),
+            })
     if 'created_at' in item:
         out['created_at'] = item.get('created_at')
     return out

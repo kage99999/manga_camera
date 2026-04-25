@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.114）:
-# - バージョン更新に追従
+# 変更点（1.120）:
+# - 選択中/記録済みOBJデータ一覧の幅指定を調整
+# - 選択中OBJ一覧もボタン行表示へ変更
 # - UI表示と操作は現状維持
 
 import bpy
@@ -13,6 +14,8 @@ from .core import (
     safe_basename,
     ensure_valid_saved_enum,
     _sync_scene_saved_memo,
+    _safe_saved_index,
+    _get_saved_item_safe,
     PANEL_LABEL,
     _ENUM_CACHE,
 )
@@ -161,10 +164,57 @@ def _draw_saved_memo_controls(layout, context):
         return
 
     _sync_scene_saved_memo(scene, manager)
-    box.prop(scene, 'saved_memo_text', text="")
+    box.prop(scene, 'saved_memo_text', text="摘要メモ")
+    box.prop(scene, 'record_selected_objects', text="選択OBJデータ")
+    if getattr(scene, 'record_selected_objects', False):
+        names = []
+        camera = getattr(scene, "camera", None)
+        for obj in getattr(context, "selected_objects", []) or []:
+            if obj == camera:
+                continue
+            names.append(str(obj.name))
+        list_box = box.box()
+        if names:
+            list_box.label(text="選択中オブジェクト")
+            list_col = list_box.column(align=True)
+            list_col.ui_units_x = 28
+            for name in names:
+                row = list_col.row(align=True)
+                row.ui_units_x = 28
+                row.scale_y = 0.9
+                op = row.operator("camera.select_recorded_object", text=name, icon='RESTRICT_SELECT_OFF')
+                op.object_name = name
+        else:
+            list_box.label(text="選択中オブジェクトはありません")
+
+    current_data = _get_saved_item_safe(manager, _safe_saved_index(scene, manager), default={}) or {}
+    recorded_objects = current_data.get('selected_objects', []) if isinstance(current_data, dict) else []
+    if bool(current_data.get('record_selected_objects', False)) and isinstance(recorded_objects, list):
+        record_box = box.box()
+        record_box.label(text="記録済みOBJデータ")
+        if recorded_objects:
+            record_col = record_box.column(align=True)
+            record_col.ui_units_x = 28
+            for obj_data in recorded_objects:
+                if not isinstance(obj_data, dict):
+                    continue
+                name = str(obj_data.get('name', '') or '')
+                if not name:
+                    continue
+                row = record_col.row(align=True)
+                row.ui_units_x = 28
+                row.scale_y = 0.78
+                op = row.operator("camera.select_recorded_object", text=name, icon='RESTRICT_SELECT_OFF')
+                op.object_name = name
+                exists = bpy.data.objects.get(name) is not None
+                row.enabled = exists
+                if not exists:
+                    row.label(text="なし")
+        else:
+            record_box.label(text="記録済みOBJデータはありません")
     row = box.row()
     row.scale_y = 1.4
-    row.operator("camera.save_selected_stock_memo", text="メモ記録")
+    row.operator("camera.save_selected_stock_memo", text="追加データ記録")
 
 
 def _draw_cycle_controls(layout, context):
@@ -296,7 +346,7 @@ class VIEW3D_PT_custom_panel_record_read(bpy.types.Panel):
 
 
 class VIEW3D_PT_custom_panel_saved_memo(bpy.types.Panel):
-    bl_label = "摘要メモ"
+    bl_label = "追加データ記録"
     bl_idname = "VIEW3D_PT_custom_panel_saved_memo"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -389,5 +439,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.114
+# Version Footer: 1.120
 # -------------------------------

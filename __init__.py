@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.114）:
-# - ストック保存ダイアログの初期ファイル名を読込場所ベースへ変更
-# - 日付付きJSON名を自動生成
+# 変更点（1.120）:
+# - 選択中/記録済みOBJデータ一覧の幅指定を調整
+# - 選択中OBJ一覧もボタン行表示へ変更
 # - UIと機能は現状維持
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 114),
+    "version": (1, 0, 120),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -29,5 +29,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.114
+# Version Footer: 1.120
 # -------------------------------

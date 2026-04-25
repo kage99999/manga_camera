@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.114）:
-# - ストック保存ダイアログの初期ファイル名を読込場所ベースへ変更
-# - 日付付きJSON名を自動生成
+# 変更点（1.120）:
+# - 選択中/記録済みOBJデータ一覧の幅指定を調整
+# - 選択中OBJ一覧もボタン行表示へ変更
 # - UIと機能は現状維持
 
 import bpy
@@ -51,7 +51,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 114)  # 1.114
+    v = (1, 0, 120)  # 1.120
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -155,6 +155,41 @@ def _apply_saved_camera_data(scene, camera, manager, data) -> None:
         _apply_saved_background_to_camera(camera, manager, data if isinstance(data, dict) else {})
     except Exception as e:
         print(f"下絵の読み込み中にエラーが発生しました: {e}")
+    try:
+        _apply_saved_selected_object_data(data if isinstance(data, dict) else {})
+    except Exception as e:
+        print(f"選択OBJデータの適用中にエラーが発生しました: {e}")
+
+
+def _apply_saved_selected_object_data(data) -> None:
+    if not isinstance(data, dict):
+        return
+    if not bool(data.get('record_selected_objects', False)):
+        return
+    selected_objects = data.get('selected_objects', [])
+    if not isinstance(selected_objects, list):
+        return
+    for obj_data in selected_objects:
+        if not isinstance(obj_data, dict):
+            continue
+        name = str(obj_data.get('name', '') or '')
+        if not name:
+            continue
+        obj = bpy.data.objects.get(name)
+        if obj is None:
+            continue
+        try:
+            obj.location = obj_data.get('location', list(obj.location))
+        except Exception:
+            pass
+        try:
+            obj.rotation_euler = obj_data.get('rotation', list(obj.rotation_euler))
+        except Exception:
+            pass
+        try:
+            obj.scale = obj_data.get('scale', list(obj.scale))
+        except Exception:
+            pass
 
 # ---------------- OS操作 ----------------
 def _open_system_folder(path: str):
@@ -435,6 +470,18 @@ def _build_current_camera_saved_item(scene, camera) -> dict:
                 bg_depth = bg.display_depth
                 break
 
+    selected_objects = []
+    if bool(getattr(scene, 'record_selected_objects', False)):
+        for obj in getattr(bpy.context, 'selected_objects', []) or []:
+            if obj == camera:
+                continue
+            selected_objects.append({
+                'name': str(obj.name),
+                'location': list(obj.location),
+                'rotation': list(obj.rotation_euler),
+                'scale': list(obj.scale),
+            })
+
     return {
         'position': list(camera.location),
         'rotation': list(camera.rotation_euler),
@@ -446,6 +493,8 @@ def _build_current_camera_saved_item(scene, camera) -> dict:
         'bg_depth': bg_depth,
         'frame_current': int(scene.frame_current),
         'memo': str(getattr(scene, 'saved_memo_text', '') or ''),
+        'record_selected_objects': bool(getattr(scene, 'record_selected_objects', False)),
+        'selected_objects': selected_objects,
         'created_at': float(time.time()),
     }
 
@@ -477,6 +526,28 @@ def _save_current_item_as_stock(scene, manager, new_item, overwrite_index: int |
     _set_saved_camera_index_safe(scene, manager, len(manager.saved_camera_data) - 1)
     return 'append'
 
+
+def _normalized_without_created_at(item: dict) -> dict:
+    normalized = _normalize_saved_item(item)
+    normalized.pop('created_at', None)
+    return normalized
+
+
+def _same_base_record_data(existing_item: dict, current_item: dict) -> bool:
+    existing = _normalized_without_created_at(existing_item)
+    current = _normalized_without_created_at(current_item)
+    return (
+        tuple(existing.get('position', ())) == tuple(current.get('position', ()))
+        and tuple(existing.get('rotation', ())) == tuple(current.get('rotation', ()))
+        and existing.get('resolution_x') == current.get('resolution_x')
+        and existing.get('resolution_y') == current.get('resolution_y')
+        and existing.get('focal_length') == current.get('focal_length')
+        and existing.get('bg_image') == current.get('bg_image')
+        and existing.get('bg_opacity') == current.get('bg_opacity')
+        and existing.get('bg_depth') == current.get('bg_depth')
+        and existing.get('frame_current') == current.get('frame_current')
+    )
+
 class OBJECT_OT_save_camera_position(bpy.types.Operator):
     bl_idname = "camera.save_position"
     bl_label = "カメラ位置を保存"
@@ -499,7 +570,7 @@ class OBJECT_OT_save_camera_position(bpy.types.Operator):
 
 class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
     bl_idname = "camera.save_selected_stock_memo"
-    bl_label = "摘要メモを保存"
+    bl_label = "追加データ記録"
 
     def execute(self, context):
         scene = context.scene
@@ -521,39 +592,85 @@ class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
 
         current_item = _build_current_camera_saved_item(scene, camera)
         existing = dict(saved_items[index])
-        existing_normalized = _normalize_saved_item(existing)
-        current_normalized = _normalize_saved_item(current_item)
+        existing_normalized = _normalized_without_created_at(existing)
+        current_normalized = _normalized_without_created_at(current_item)
         if existing_normalized == current_normalized:
-            self.report({'INFO'}, "同じ設定・同じ摘要メモのためメモ記録しませんでした")
+            self.report({'INFO'}, "同じ設定・同じ追加データのため記録しませんでした")
             return {'CANCELLED'}
-        existing_memo = str(_saved_value(existing_normalized, 'memo', '') or '')
-        current_memo = str(_saved_value(current_normalized, 'memo', '') or '')
-
-        same_stock_except_memo = (
-            tuple(existing_normalized.get('position', ())) == tuple(current_normalized.get('position', ()))
-            and tuple(existing_normalized.get('rotation', ())) == tuple(current_normalized.get('rotation', ()))
-            and existing_normalized.get('resolution_x') == current_normalized.get('resolution_x')
-            and existing_normalized.get('resolution_y') == current_normalized.get('resolution_y')
-            and existing_normalized.get('focal_length') == current_normalized.get('focal_length')
-            and existing_normalized.get('bg_image') == current_normalized.get('bg_image')
-            and existing_normalized.get('frame_current') == current_normalized.get('frame_current')
-            and existing_memo != current_memo
-        )
+        same_base_record_data = _same_base_record_data(existing, current_item)
 
         result = _save_current_item_as_stock(
             scene,
             manager,
             current_item,
-            overwrite_index=index if same_stock_except_memo else None,
+            overwrite_index=index if same_base_record_data else None,
         )
         if result == 'skip':
-            self.report({'INFO'}, "同じ設定・同じ摘要メモのためメモ記録しませんでした")
+            self.report({'INFO'}, "同じ設定・同じ追加データのため記録しませんでした")
             return {'CANCELLED'}
         if result == 'overwrite':
-            self.report({'INFO'}, "選択中ストックへ摘要メモを上書き保存しました")
+            self.report({'INFO'}, "選択中ストックへ追加データを上書き保存しました")
         else:
             self.report({'INFO'}, "カメラ位置を保存しました")
         return {'FINISHED'}
+
+
+class OBJECT_OT_select_recorded_object(bpy.types.Operator):
+    bl_idname = "camera.select_recorded_object"
+    bl_label = "記録済みOBJを選択"
+
+    object_name: bpy.props.StringProperty(name="オブジェクト名")
+    extend_selection: bpy.props.BoolProperty(
+        name="選択に追加",
+        description="既存の選択を維持して追加選択します",
+        default=False,
+        options={'SKIP_SAVE'},
+    )
+
+    def invoke(self, context, event):
+        self.extend_selection = bool(getattr(event, "shift", False))
+        return self.execute(context)
+
+    def execute(self, context):
+        name = str(getattr(self, "object_name", "") or "")
+        if not name:
+            self.report({'WARNING'}, "オブジェクト名がありません")
+            return {'CANCELLED'}
+
+        obj = bpy.data.objects.get(name)
+        if obj is None:
+            self.report({'WARNING'}, f"オブジェクトが見つかりません: {name}")
+            return {'CANCELLED'}
+
+        try:
+            if bpy.ops.object.mode_set.poll():
+                bpy.ops.object.mode_set(mode='OBJECT')
+        except Exception:
+            pass
+
+        if not bool(getattr(self, "extend_selection", False)):
+            try:
+                bpy.ops.object.select_all(action='DESELECT')
+            except Exception:
+                for selected in list(getattr(context, "selected_objects", []) or []):
+                    try:
+                        selected.select_set(False)
+                    except Exception:
+                        pass
+
+        try:
+            obj.select_set(True)
+            context.view_layer.objects.active = obj
+        except Exception as e:
+            self.report({'ERROR'}, f"オブジェクト選択に失敗しました: {e}")
+            return {'CANCELLED'}
+
+        if bool(getattr(self, "extend_selection", False)):
+            self.report({'INFO'}, f"オブジェクトを追加選択しました: {name}")
+        else:
+            self.report({'INFO'}, f"オブジェクトを選択しました: {name}")
+        return {'FINISHED'}
+
 
 class OBJECT_OT_delete_camera_position(bpy.types.Operator):
     bl_idname = "camera.delete_position"
@@ -1263,6 +1380,11 @@ def register_scene_simple_properties():
         default="",
         options={'TEXTEDIT_UPDATE'}
     )
+    bpy.types.Scene.record_selected_objects = bpy.props.BoolProperty(
+        name="選択OBJデータ",
+        description="ON のとき、選択中オブジェクトの位置・回転・サイズを記録データへ含めます",
+        default=False,
+    )
 
 # =========================
 # 下絵 表示同期（Nパネル ⇔ カメラデータ）
@@ -1313,7 +1435,7 @@ def unregister_camera_sync_properties():
         delattr(bpy.types.Camera, "mpm_bg_visible")
 
 def unregister_scene_simple_properties():
-    for attr in ("saved_camera_index", "show_settings", "show_background_section", "open_output_after_render", "bg_cycle_skip_stocked", "saved_memo_text"):
+    for attr in ("saved_camera_index", "show_settings", "show_background_section", "open_output_after_render", "bg_cycle_skip_stocked", "saved_memo_text", "record_selected_objects"):
         if hasattr(bpy.types.Scene, attr):
             delattr(bpy.types.Scene, attr)
 
@@ -1415,6 +1537,7 @@ CLASSES = (
     OBJECT_OT_recall_camera_position,
     OBJECT_OT_save_camera_position,
     OBJECT_OT_save_selected_stock_memo,
+    OBJECT_OT_select_recorded_object,
     OBJECT_OT_delete_camera_position,
     OBJECT_OT_set_camera_location_zero,
     OBJECT_OT_set_camera_rotation_snap,
@@ -1572,5 +1695,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.114
+# Version Footer: 1.120
 # -------------------------------
