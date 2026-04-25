@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.120）:
-# - 選択中/記録済みOBJデータ一覧の幅指定を調整
-# - 選択中OBJ一覧もボタン行表示へ変更
+# 変更点（1.122）:
+# - 全OBJデータ削除UI追加に追従
+# - UIと機能は現状維持
 # - UIと機能は現状維持
 
 import bpy
@@ -51,7 +51,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 120)  # 1.120
+    v = (1, 0, 122)  # 1.122
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -1695,5 +1695,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.120
+# Version Footer: 1.122
 # -------------------------------

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.120）:
-# - 選択中/記録済みOBJデータ一覧の幅指定を調整
-# - 選択中OBJ一覧もボタン行表示へ変更
+# 変更点（1.122）:
+# - 全OBJデータ削除UI追加に追従
+# - 全OBJデータ読込ボタン名を変更
 # - UI表示と操作は現状維持
 
 import bpy
@@ -22,6 +22,10 @@ from .core import (
 
 from .dolly import (
     get_dolly_props,
+)
+
+from .all_object_data import (
+    draw_all_object_data_controls,
 )
 
 
@@ -305,6 +309,11 @@ def _draw_misc_controls(layout, context):
         op.reverse = True
         op = row.operator("camera.sort_saved_data", text="ソート（昇順）", icon='SORTSIZE')
         op.reverse = False
+        box.separator()
+        row = box.row()
+        row.prop(scene, "show_all_object_data_section", toggle=True, text="全OBJデータ記録")
+        if getattr(scene, "show_all_object_data_section", False):
+            draw_all_object_data_controls(box, context)
 
 
 
@@ -439,5 +448,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.120
+# Version Footer: 1.122
 # -------------------------------
