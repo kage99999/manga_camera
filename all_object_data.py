@@ -2,9 +2,9 @@
 # ファイル名：all_object_data.py
 # 00漫画用Camera Position Manager
 # 機能：全オブジェクト位置・回転・スケールの専用ストック管理
-# 変更点（1.122）:
-# - 全OBJデータの個別削除UIを追加
-# - 全OBJデータ読込ボタン名を変更
+# 変更点（1.124）:
+# - バージョン更新に追従
+# - 全OBJデータ機能自体の挙動は現状維持
 
 import json
 import os
@@ -573,5 +573,5 @@ def unregister_all_object_data():
 
 # -------------------------------
 # ファイル名：all_object_data.py
-# Version Footer: 1.122
+# Version Footer: 1.124
 # -------------------------------

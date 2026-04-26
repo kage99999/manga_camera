@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.122）:
-# - 全OBJデータ削除UI追加に追従
-# - 全OBJデータ読込ボタン名を変更
+# 変更点（1.124）:
+# - 3Dビューのローカルカメラ誤設定対策に追従
+# - カメラビュー切替前の安全化に追従
 # - UI表示と操作は現状維持
 
 import bpy
@@ -16,6 +16,8 @@ from .core import (
     _sync_scene_saved_memo,
     _safe_saved_index,
     _get_saved_item_safe,
+    _get_valid_scene_camera,
+    _sanitize_view3d_local_cameras,
     PANEL_LABEL,
     _ENUM_CACHE,
 )
@@ -30,13 +32,13 @@ from .all_object_data import (
 
 
 def _get_scene_camera(context):
-    scene = context.scene
-    return getattr(scene, "camera", None)
+    camera = _get_valid_scene_camera(context.scene, repair=True)
+    _sanitize_view3d_local_cameras(context, camera)
+    return camera
 
 
 def _draw_active_camera_warning(layout, context):
-    scene = context.scene
-    if getattr(scene, "camera", None) is not None:
+    if _get_scene_camera(context) is not None:
         return
     alert_box = layout.box()
     alert_box.alert = True
@@ -172,7 +174,7 @@ def _draw_saved_memo_controls(layout, context):
     box.prop(scene, 'record_selected_objects', text="選択OBJデータ")
     if getattr(scene, 'record_selected_objects', False):
         names = []
-        camera = getattr(scene, "camera", None)
+        camera = _get_scene_camera(context)
         for obj in getattr(context, "selected_objects", []) or []:
             if obj == camera:
                 continue
@@ -448,5 +450,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.122
+# Version Footer: 1.124
 # -------------------------------

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.122）:
-# - 全OBJデータ削除UI追加に追従
-# - UIと機能は現状維持
+# 変更点（1.124）:
+# - 3Dビューのローカルカメラに非カメラOBJが入った場合の誤操作を防止
+# - カメラビュー切替前にローカルカメラ設定を安全化
 # - UIと機能は現状維持
 
 import bpy
@@ -51,7 +51,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 122)  # 1.122
+    v = (1, 0, 124)  # 1.124
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -113,6 +113,101 @@ def _tag_redraw_all_areas() -> None:
                 pass
 
 
+def _is_valid_camera_object(obj) -> bool:
+    if obj is None:
+        return False
+    try:
+        if bpy.data.objects.get(obj.name) != obj:
+            return False
+    except Exception:
+        return False
+    return getattr(obj, "type", "") == "CAMERA" and getattr(obj, "data", None) is not None
+
+
+def _find_camera_candidate(scene):
+    try:
+        active = bpy.context.view_layer.objects.active
+    except Exception:
+        active = None
+    if _is_valid_camera_object(active):
+        try:
+            if scene.objects.get(active.name) == active:
+                return active
+        except Exception:
+            pass
+
+    for obj in getattr(scene, "objects", []) or []:
+        if _is_valid_camera_object(obj):
+            return obj
+    return None
+
+
+def _get_valid_scene_camera(scene, repair: bool = True):
+    if scene is None:
+        return None
+    camera = getattr(scene, "camera", None)
+    if _is_valid_camera_object(camera):
+        return camera
+    if not repair:
+        return None
+
+    replacement = _find_camera_candidate(scene)
+    try:
+        scene.camera = replacement
+    except Exception:
+        pass
+    return replacement if _is_valid_camera_object(replacement) else None
+
+
+def _ensure_scene_camera(scene, create: bool = True):
+    camera = _get_valid_scene_camera(scene, repair=True)
+    if camera or not create:
+        return camera
+    cam_data = bpy.data.cameras.new(name="Camera")
+    cam_obj = bpy.data.objects.new(name="Camera", object_data=cam_data)
+    scene.collection.objects.link(cam_obj)
+    scene.camera = cam_obj
+    return cam_obj
+
+
+def _sanitize_view3d_local_camera(space, fallback_camera=None) -> bool:
+    if space is None or not hasattr(space, "camera"):
+        return False
+    try:
+        local_camera = getattr(space, "camera", None)
+    except Exception:
+        return False
+    if local_camera is None or _is_valid_camera_object(local_camera):
+        return False
+
+    safe_camera = fallback_camera if _is_valid_camera_object(fallback_camera) else None
+    try:
+        setattr(space, "camera", safe_camera)
+        return True
+    except Exception:
+        return False
+
+
+def _sanitize_view3d_local_cameras(context, camera=None) -> None:
+    safe_camera = camera if _is_valid_camera_object(camera) else _get_valid_scene_camera(getattr(context, "scene", None), repair=True)
+    try:
+        wm = context.window_manager
+    except Exception:
+        wm = None
+    if wm is None:
+        return
+    for window in getattr(wm, "windows", []) or []:
+        screen = getattr(window, "screen", None)
+        if screen is None:
+            continue
+        for area in getattr(screen, "areas", []) or []:
+            if getattr(area, "type", "") != 'VIEW_3D':
+                continue
+            for space in getattr(area, "spaces", []) or []:
+                if getattr(space, "type", "") == 'VIEW_3D':
+                    _sanitize_view3d_local_camera(space, safe_camera)
+
+
 def _set_saved_camera_index_safe(scene, manager, index: int | None = 0) -> None:
     """保存ストックのEnum値を安全に更新し、必要な再描画を行う"""
     _storage_set_saved_camera_index_safe(scene, manager, _tag_redraw_all_areas, index)
@@ -120,7 +215,7 @@ def _set_saved_camera_index_safe(scene, manager, index: int | None = 0) -> None:
 
 def _apply_saved_camera_data(scene, camera, manager, data) -> None:
     """保存1件を安全にカメラへ適用する"""
-    if not scene or not camera or not getattr(camera, "data", None):
+    if not scene or not _is_valid_camera_object(camera):
         return
 
     fr = _saved_value(data, 'frame_current', None)
@@ -374,12 +469,10 @@ class OBJECT_OT_select_camera_data(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        cam_obj = scene.camera
-        if not cam_obj or cam_obj.name not in bpy.data.objects:
-            cam_data = bpy.data.cameras.new(name="Camera")
-            cam_obj = bpy.data.objects.new(name="Camera", object_data=cam_data)
-            scene.collection.objects.link(cam_obj)
-            scene.camera = cam_obj
+        cam_obj = _ensure_scene_camera(scene, create=True)
+        if not _is_valid_camera_object(cam_obj):
+            self.report({'ERROR'}, "カメラの準備に失敗しました")
+            return {'CANCELLED'}
 
         win, area, region = _get_view3d_window_area_region(context)
         if win and area and region:
@@ -402,6 +495,7 @@ class OBJECT_OT_select_camera_data(bpy.types.Operator):
         except Exception:
             pass
         context.view_layer.objects.active = cam_obj
+        _sanitize_view3d_local_cameras(context, cam_obj)
 
         try:
             for win2 in context.window_manager.windows:
@@ -422,7 +516,7 @@ class OBJECT_OT_recall_camera_position(bpy.types.Operator):
     bl_label = "カメラ位置を呼び出す"
     def execute(self, context):
         scene = context.scene
-        camera = scene.camera
+        camera = _get_valid_scene_camera(scene, repair=True)
         if not camera:
             self.report({'WARNING'}, "カメラがありません")
             return {'CANCELLED'}
@@ -445,6 +539,7 @@ class OBJECT_OT_recall_camera_position(bpy.types.Operator):
             _set_saved_camera_index_safe(scene, manager, latest_index)
         except Exception:
             pass
+        _sanitize_view3d_local_cameras(context, camera)
         for area in context.screen.areas:
             if area.type == 'VIEW_3D':
                 area.spaces.active.region_3d.view_perspective = 'CAMERA'
@@ -554,7 +649,7 @@ class OBJECT_OT_save_camera_position(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        camera = scene.camera
+        camera = _get_valid_scene_camera(scene, repair=True)
         manager = get_camera_data_manager()
         if camera:
             new_item = _build_current_camera_saved_item(scene, camera)
@@ -574,7 +669,7 @@ class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        camera = scene.camera
+        camera = _get_valid_scene_camera(scene, repair=True)
         manager = get_camera_data_manager()
         if not camera:
             self.report({'WARNING'}, "カメラが選択されていません")
@@ -713,7 +808,7 @@ class OBJECT_OT_set_camera_location_zero(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        camera = scene.camera
+        camera = _get_valid_scene_camera(scene, repair=True)
         if not camera:
             self.report({'WARNING'}, "アクティブカメラがありません")
             return {'CANCELLED'}
@@ -750,7 +845,7 @@ class OBJECT_OT_set_camera_rotation_snap(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        camera = scene.camera
+        camera = _get_valid_scene_camera(scene, repair=True)
         if not camera:
             self.report({'WARNING'}, "アクティブカメラがありません")
             return {'CANCELLED'}
@@ -780,13 +875,10 @@ class OBJECT_OT_load_background_image(bpy.types.Operator):
     def _ensure_camera_and_align_if_needed(self, context):
         """カメラが無ければ作成。下絵読み込み時は常に Ctrl+Alt+Num0 相当でビューに合わせる。"""
         scene = context.scene
-        cam_obj = scene.camera
-        if not cam_obj or cam_obj.name not in bpy.data.objects:
-            # カメラ新規作成
-            cam_data = bpy.data.cameras.new(name="Camera")
-            cam_obj = bpy.data.objects.new(name="Camera", object_data=cam_data)
-            scene.collection.objects.link(cam_obj)
-            scene.camera = cam_obj
+        cam_obj = _ensure_scene_camera(scene, create=True)
+        if not _is_valid_camera_object(cam_obj):
+            return
+        _sanitize_view3d_local_cameras(context, cam_obj)
 
         # 3Dビューの window/area/region を取得
         win, area, region = _get_view3d_window_area_region(context)
@@ -804,6 +896,7 @@ class OBJECT_OT_load_background_image(bpy.types.Operator):
             return  # ビュー合わせはスキップ
 
         with context.temp_override(window=win, area=area, region=region, scene=scene):
+            _sanitize_view3d_local_camera(area.spaces.active, cam_obj)
             # オブジェクトモードに
             try:
                 if bpy.ops.object.mode_set.poll():
@@ -838,11 +931,10 @@ class OBJECT_OT_load_background_image(bpy.types.Operator):
     def execute(self, context):
         manager = get_camera_data_manager()
         scene = context.scene
-        camera = scene.camera
 
         # 1) カメラ準備＆アライン（必要なら）
         self._ensure_camera_and_align_if_needed(context)
-        camera = scene.camera  # 念のため再取得
+        camera = _get_valid_scene_camera(scene, repair=True)  # 念のため再取得
 
         # 2) 画像ロード＆スロット設定（既存仕様踏襲）
         if not camera:
@@ -875,6 +967,7 @@ class OBJECT_OT_load_background_image(bpy.types.Operator):
             return {'CANCELLED'}
 
         # 3) カメラビューに切替（_ensure_camera_and_align_if_needed で実施済みだが保険で実行）
+        _sanitize_view3d_local_cameras(context, camera)
         for area in context.screen.areas:
             if area.type == 'VIEW_3D':
                 try:
@@ -895,10 +988,10 @@ class OBJECT_OT_reload_background_image(bpy.types.Operator):
     bl_label = "下絵を再読込"
     def execute(self, context):
         scene = context.scene
-        camera = scene.camera
+        camera = _get_valid_scene_camera(scene, repair=True)
         manager = get_camera_data_manager()
 
-        if not camera or not camera.data:
+        if not camera:
             self.report({'WARNING'}, "カメラがありません")
             return {'CANCELLED'}
 
@@ -954,6 +1047,7 @@ class OBJECT_OT_reload_background_image(bpy.types.Operator):
             self.report({'INFO'}, "ストックがありません")
 
         # カメラビューへ
+        _sanitize_view3d_local_cameras(context, camera)
         for area in context.screen.areas:
             if area.type == 'VIEW_3D':
                 area.spaces.active.region_3d.view_perspective = 'CAMERA'
@@ -1214,9 +1308,9 @@ class OBJECT_OT_prev_folder_image(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        camera = scene.camera
+        camera = _get_valid_scene_camera(scene, repair=True)
         manager = get_camera_data_manager()
-        if not camera or not getattr(camera, 'data', None):
+        if not camera:
             self.report({'WARNING'}, 'カメラがありません')
             return {'CANCELLED'}
 
@@ -1256,9 +1350,9 @@ class OBJECT_OT_next_folder_image(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        camera = scene.camera
+        camera = _get_valid_scene_camera(scene, repair=True)
         manager = get_camera_data_manager()
-        if not camera or not getattr(camera, 'data', None):
+        if not camera:
             self.report({'WARNING'}, 'カメラがありません')
             return {'CANCELLED'}
 
@@ -1329,6 +1423,10 @@ def get_saved_camera_items(self, context):
     return _ENUM_CACHE if _ENUM_CACHE else [("0", "(No Items)", "")]
 
 def _apply_camera_view(context):
+    camera = _get_valid_scene_camera(context.scene, repair=True)
+    if camera is None:
+        return
+    _sanitize_view3d_local_cameras(context, camera)
     # カメラビューへ切替（画像が無くても構図確認できるように）
     for area in context.screen.areas:
         if area.type == 'VIEW_3D':
@@ -1337,7 +1435,7 @@ def _apply_camera_view(context):
 
 def update_saved_camera_index(self, context):
     scene = context.scene
-    camera = scene.camera
+    camera = _get_valid_scene_camera(scene, repair=True)
     manager = get_camera_data_manager()
     saved_items = _ensure_manager_saved_data_normalized(manager)
     if camera and saved_items:
@@ -1695,5 +1793,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.122
+# Version Footer: 1.124
 # -------------------------------

@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.122）:
-# - 全OBJデータの個別削除UIを追加
-# - 全OBJデータ読込ボタン名を変更
+# 変更点（1.124）:
+# - 3Dビューのローカルカメラに非カメラOBJが入った場合の誤操作を防止
+# - カメラビュー切替前にローカルカメラ設定を安全化
 # - UIと機能は現状維持
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 122),
+    "version": (1, 0, 124),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -32,5 +32,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.122
+# Version Footer: 1.124
 # -------------------------------
