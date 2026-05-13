@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.131）:
+# 変更点（1.141）:
 # - UI表示用バージョンを更新
-# - Nパネルのヘッダー表示をVer.1.131へ更新
+# - Nパネルのヘッダー表示をVer.1.141へ更新
 
 import bpy
 import os
@@ -50,7 +50,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 131)  # 1.131
+    v = (1, 0, 141)  # 1.141
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -1792,5 +1792,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.131
+# Version Footer: 1.141
 # -------------------------------

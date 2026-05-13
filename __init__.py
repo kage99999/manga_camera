@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.131）:
-# - 選択中オブジェクト一覧も固定高さのUIList表示へ変更
-# - 記録済みOBJデータ一覧のUIList表示は維持
+# 変更点（1.141）:
+# - 追加データ記録内の小見出しをBlender標準の折りたたみ表示へ統一
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 131),
+    "version": (1, 0, 141),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -31,5 +30,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.131
+# Version Footer: 1.141
 # -------------------------------

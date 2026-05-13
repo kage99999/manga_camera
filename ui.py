@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.131）:
-# - 選択中オブジェクト一覧もWindowManager管理のUIListへ変更
-# - 選択OBJデータの全件縦表示を固定高さのスクロール表示へ変更
-# - 記録済みOBJデータ一覧のUIList表示は維持
+# 変更点（1.141）:
+# - 追加データ記録内の小見出しをBlender標準の折りたたみ表示へ統一
 
 import bpy
 
@@ -92,6 +90,25 @@ class MPM_OT_selected_object_fallback_scroll(bpy.types.Operator):
         wm = context.window_manager
         current = int(getattr(wm, "mpm_selected_object_offset_v131", 0) or 0)
         setattr(wm, "mpm_selected_object_offset_v131", max(0, current + int(self.direction)))
+        return {'FINISHED'}
+
+
+class MPM_OT_toggle_additional_data_subsection(bpy.types.Operator):
+    bl_idname = "camera.toggle_additional_data_subsection"
+    bl_label = "追加データ記録の小見出しを折りたたみ"
+
+    target: bpy.props.StringProperty(default="", options={'SKIP_SAVE'})
+
+    def execute(self, context):
+        scene = context.scene
+        if self.target == "selected":
+            attr = "mpm_show_selected_object_data_list"
+        elif self.target == "recorded":
+            attr = "mpm_show_recorded_object_data_list"
+        else:
+            return {'CANCELLED'}
+        current = bool(getattr(scene, attr, True))
+        setattr(scene, attr, not current)
         return {'FINISHED'}
 
 
@@ -200,13 +217,16 @@ def _draw_record_read_controls(layout, context):
     row.operator("camera.reload_background_image", text="再読込")
 
     if manager.saved_camera_data:
-        layout.label(text="保存された位置と回転と解像度と下絵")
+        layout.label(text="下絵のファイル名")
         ensure_valid_saved_enum(scene, manager)
         try:
             layout.prop(scene, 'saved_camera_index', text="")
         except Exception:
             rebuild_enum_cache(manager)
             layout.prop(scene, 'saved_camera_index', text="")
+
+        current_data = _get_saved_item_safe(manager, _safe_saved_index(scene, manager), default={}) or {}
+        _draw_saved_data_status_labels(layout, current_data)
 
         box = layout.box()
         row = box.row(align=True)
@@ -220,6 +240,57 @@ def _draw_record_read_controls(layout, context):
         row.operator("camera.next_saved_stock", text=">")
 
         layout.label(text=f"ストック数: {len(manager.saved_camera_data)}")
+
+
+def _saved_data_has_recorded_objects(data):
+    if not isinstance(data, dict):
+        return False
+    if not bool(data.get('record_selected_objects', False)):
+        return False
+    recorded_objects = data.get('selected_objects', [])
+    if not isinstance(recorded_objects, list):
+        return False
+    for obj_data in recorded_objects:
+        name = _recorded_object_name_from_data(obj_data)
+        if name:
+            return True
+    return False
+
+
+def _saved_data_has_memo(data):
+    if not isinstance(data, dict):
+        return False
+    memo = str(data.get('memo', '') or '').strip()
+    return bool(memo)
+
+
+def _draw_saved_data_status_labels(layout, current_data):
+    has_obj = _saved_data_has_recorded_objects(current_data)
+    has_memo = _saved_data_has_memo(current_data)
+    row = layout.row(align=True)
+    row.alignment = 'LEFT'
+
+    prefix_row = row.row(align=True)
+    prefix_row.alignment = 'LEFT'
+    prefix_row.ui_units_x = 4.2
+    prefix_row.label(text="付随データ：")
+
+    obj_row = row.row(align=True)
+    obj_row.alignment = 'LEFT'
+    obj_row.ui_units_x = 6.0
+    obj_row.enabled = has_obj
+    obj_row.label(text="[OBJデータ有]" if has_obj else "[OBJデータ無]")
+
+    slash_row = row.row(align=True)
+    slash_row.alignment = 'LEFT'
+    slash_row.ui_units_x = 0.6
+    slash_row.label(text="/")
+
+    memo_row = row.row(align=True)
+    memo_row.alignment = 'LEFT'
+    memo_row.ui_units_x = 4.5
+    memo_row.enabled = has_memo
+    memo_row.label(text="[摘要有]" if has_memo else "[摘要無]")
 
 
 def _draw_saved_memo_controls(layout, context):
@@ -243,10 +314,10 @@ def _draw_saved_memo_controls(layout, context):
             if obj == camera:
                 continue
             names.append(str(obj.name))
-        list_box = box.box()
         if names:
-            _draw_current_selected_object_data_list(list_box, context, names)
+            _draw_current_selected_object_data_list(box, context, names)
         else:
+            list_box = box.box()
             list_box.label(text="選択中オブジェクトはありません")
 
     current_data = _get_saved_item_safe(manager, _safe_saved_index(scene, manager), default={}) or {}
@@ -259,10 +330,45 @@ def _draw_saved_memo_controls(layout, context):
     row.operator("camera.save_selected_stock_memo", text="追加データ記録")
 
 
+
+def _draw_additional_data_collapsible_body(layout, context, prop_name, target, text, panel_id):
+    # Blender標準のPanel折りたたみと同じ見た目に寄せるため、利用可能ならUILayout.panelを使います。
+    try:
+        header, body = layout.panel(panel_id, default_closed=False)
+        if header is not None:
+            header.label(text=text)
+        return body
+    except Exception:
+        pass
+
+    # 古いBlenderなどでUILayout.panelが使えない場合のみ、標準の開閉アイコン付きoperatorに退避します。
+    scene = context.scene
+    is_open = bool(getattr(scene, prop_name, True))
+    icon_name = 'DISCLOSURE_TRI_DOWN' if is_open else 'DISCLOSURE_TRI_RIGHT'
+    row = layout.row(align=True)
+    row.alignment = 'LEFT'
+    toggle_op = row.operator(
+        "camera.toggle_additional_data_subsection",
+        text=text,
+        icon=icon_name,
+        emboss=False,
+    )
+    toggle_op.target = target
+    return layout if is_open else None
+
 def _draw_current_selected_object_data_list(layout, context, names):
-    layout.label(text="選択中オブジェクト")
+    body = _draw_additional_data_collapsible_body(
+        layout,
+        context,
+        "mpm_show_selected_object_data_list",
+        "selected",
+        "選択中オブジェクト",
+        "mpm_selected_object_data_subpanel",
+    )
+    if body is None:
+        return
     if not names:
-        layout.label(text="選択中オブジェクトはありません")
+        body.label(text="選択中オブジェクトはありません")
         return
 
     wm = context.window_manager
@@ -272,19 +378,19 @@ def _draw_current_selected_object_data_list(layout, context, names):
     ):
         try:
             _sync_current_selected_object_display_items(wm, names)
-            list_row = layout.row(align=True)
+            list_row = body.row(align=True)
             list_row.template_list(
                 "MPM_UL_selected_object_list_v131", "",
                 wm, "mpm_selected_object_items_v131",
                 wm, "mpm_selected_object_index_v131",
                 rows=4, maxrows=8,
             )
-            _draw_current_selected_object_list_select_button(layout, wm)
+            _draw_current_selected_object_list_select_button(body, wm)
             return
         except Exception:
             pass
 
-    _draw_current_selected_object_compact_fallback(layout, context, names)
+    _draw_current_selected_object_compact_fallback(body, context, names)
 
 
 def _draw_current_selected_object_list_select_button(layout, wm):
@@ -379,8 +485,16 @@ def _draw_current_selected_object_compact_fallback(layout, context, names):
 
 
 def _draw_recorded_object_data_list(layout, context, scene, recorded_objects):
-    record_box = layout.box()
-    record_box.label(text="記録済みOBJデータ")
+    record_box = _draw_additional_data_collapsible_body(
+        layout,
+        context,
+        "mpm_show_recorded_object_data_list",
+        "recorded",
+        "記録済みOBJデータ",
+        "mpm_recorded_object_data_subpanel",
+    )
+    if record_box is None:
+        return
     if not recorded_objects:
         record_box.label(text="記録済みOBJデータはありません")
         return
@@ -718,6 +832,7 @@ UI_CLASSES = (
     MPM_UL_selected_object_list_v131,
     MPM_OT_recorded_object_fallback_scroll,
     MPM_OT_selected_object_fallback_scroll,
+    MPM_OT_toggle_additional_data_subsection,
     VIEW3D_PT_custom_panel,
     VIEW3D_PT_custom_panel_record_read,
     VIEW3D_PT_custom_panel_saved_memo,
@@ -740,6 +855,8 @@ def register_ui():
         "recorded_object_list_width",
         "mpm_recorded_object_items_v129",
         "mpm_recorded_object_index_v129",
+        "mpm_show_selected_object_data_list",
+        "mpm_show_recorded_object_data_list",
     ):
         if hasattr(bpy.types.Scene, attr):
             try:
@@ -767,6 +884,8 @@ def register_ui():
     bpy.types.WindowManager.mpm_selected_object_items_v131 = bpy.props.CollectionProperty(type=MPM_SelectedObjectListItemV131)
     bpy.types.WindowManager.mpm_selected_object_index_v131 = bpy.props.IntProperty(default=0, options={'SKIP_SAVE'})
     bpy.types.WindowManager.mpm_selected_object_offset_v131 = bpy.props.IntProperty(default=0, min=0, options={'SKIP_SAVE'})
+    bpy.types.Scene.mpm_show_selected_object_data_list = bpy.props.BoolProperty(name="選択中オブジェクト", default=True, options={'SKIP_SAVE'})
+    bpy.types.Scene.mpm_show_recorded_object_data_list = bpy.props.BoolProperty(name="記録済みOBJデータ", default=True, options={'SKIP_SAVE'})
     bpy.types.VIEW3D_HT_header.append(draw_header_buttons)
 
 
@@ -782,6 +901,8 @@ def unregister_ui():
         "recorded_object_list_width",
         "mpm_recorded_object_items_v129",
         "mpm_recorded_object_index_v129",
+        "mpm_show_selected_object_data_list",
+        "mpm_show_recorded_object_data_list",
     ):
         if hasattr(bpy.types.Scene, attr):
             try:
@@ -809,5 +930,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.131
+# Version Footer: 1.141
 # -------------------------------
