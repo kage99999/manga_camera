@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.124）:
-# - 3Dビューのローカルカメラに非カメラOBJが入った場合の誤操作を防止
-# - カメラビュー切替前にローカルカメラ設定を安全化
-# - UIと機能は現状維持
+# 変更点（1.131）:
+# - UI表示用バージョンを更新
+# - Nパネルのヘッダー表示をVer.1.131へ更新
 
 import bpy
 import os
@@ -51,7 +50,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 124)  # 1.124
+    v = (1, 0, 131)  # 1.131
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -723,7 +722,7 @@ class OBJECT_OT_select_recorded_object(bpy.types.Operator):
     )
 
     def invoke(self, context, event):
-        self.extend_selection = bool(getattr(event, "shift", False))
+        self.extend_selection = bool(getattr(self, "extend_selection", False) or getattr(event, "shift", False))
         return self.execute(context)
 
     def execute(self, context):
@@ -1793,5 +1792,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.124
+# Version Footer: 1.131
 # -------------------------------

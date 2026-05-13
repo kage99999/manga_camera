@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.124）:
-# - 3Dビューのローカルカメラ誤設定対策に追従
-# - カメラビュー切替前の安全化に追従
-# - UI表示と操作は現状維持
+# 変更点（1.131）:
+# - 選択中オブジェクト一覧もWindowManager管理のUIListへ変更
+# - 選択OBJデータの全件縦表示を固定高さのスクロール表示へ変更
+# - 記録済みOBJデータ一覧のUIList表示は維持
 
 import bpy
 
@@ -29,6 +29,70 @@ from .dolly import (
 from .all_object_data import (
     draw_all_object_data_controls,
 )
+
+
+class MPM_RecordedObjectListItemV130(bpy.types.PropertyGroup):
+    object_name: bpy.props.StringProperty(name="オブジェクト名", default="")
+
+
+class MPM_UL_recorded_object_list_v130(bpy.types.UIList):
+    bl_idname = "MPM_UL_recorded_object_list_v130"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index=0):
+        name = str(getattr(item, "object_name", "") or "")
+        exists = bool(name) and bpy.data.objects.get(name) is not None
+        icon_name = 'OBJECT_DATA' if exists else 'ERROR'
+        if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            row = layout.row(align=True)
+            row.label(text=name if name else "名称なし", icon=icon_name)
+        elif self.layout_type == 'GRID':
+            layout.alignment = 'CENTER'
+            layout.label(text="", icon=icon_name)
+
+
+class MPM_SelectedObjectListItemV131(bpy.types.PropertyGroup):
+    object_name: bpy.props.StringProperty(name="オブジェクト名", default="")
+
+
+class MPM_UL_selected_object_list_v131(bpy.types.UIList):
+    bl_idname = "MPM_UL_selected_object_list_v131"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index=0):
+        name = str(getattr(item, "object_name", "") or "")
+        exists = bool(name) and bpy.data.objects.get(name) is not None
+        icon_name = 'RESTRICT_SELECT_OFF' if exists else 'ERROR'
+        if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            row = layout.row(align=True)
+            row.label(text=name if name else "名称なし", icon=icon_name)
+        elif self.layout_type == 'GRID':
+            layout.alignment = 'CENTER'
+            layout.label(text="", icon=icon_name)
+
+
+class MPM_OT_recorded_object_fallback_scroll(bpy.types.Operator):
+    bl_idname = "camera.recorded_object_fallback_scroll"
+    bl_label = "記録済みOBJリストをスクロール"
+
+    direction: bpy.props.IntProperty(default=0, options={'SKIP_SAVE'})
+
+    def execute(self, context):
+        wm = context.window_manager
+        current = int(getattr(wm, "mpm_recorded_object_offset_v130", 0) or 0)
+        setattr(wm, "mpm_recorded_object_offset_v130", max(0, current + int(self.direction)))
+        return {'FINISHED'}
+
+
+class MPM_OT_selected_object_fallback_scroll(bpy.types.Operator):
+    bl_idname = "camera.selected_object_fallback_scroll"
+    bl_label = "選択中OBJリストをスクロール"
+
+    direction: bpy.props.IntProperty(default=0, options={'SKIP_SAVE'})
+
+    def execute(self, context):
+        wm = context.window_manager
+        current = int(getattr(wm, "mpm_selected_object_offset_v131", 0) or 0)
+        setattr(wm, "mpm_selected_object_offset_v131", max(0, current + int(self.direction)))
+        return {'FINISHED'}
 
 
 def _get_scene_camera(context):
@@ -181,47 +245,278 @@ def _draw_saved_memo_controls(layout, context):
             names.append(str(obj.name))
         list_box = box.box()
         if names:
-            list_box.label(text="選択中オブジェクト")
-            list_col = list_box.column(align=True)
-            list_col.ui_units_x = 28
-            for name in names:
-                row = list_col.row(align=True)
-                row.ui_units_x = 28
-                row.scale_y = 0.9
-                op = row.operator("camera.select_recorded_object", text=name, icon='RESTRICT_SELECT_OFF')
-                op.object_name = name
+            _draw_current_selected_object_data_list(list_box, context, names)
         else:
             list_box.label(text="選択中オブジェクトはありません")
 
     current_data = _get_saved_item_safe(manager, _safe_saved_index(scene, manager), default={}) or {}
     recorded_objects = current_data.get('selected_objects', []) if isinstance(current_data, dict) else []
     if bool(current_data.get('record_selected_objects', False)) and isinstance(recorded_objects, list):
-        record_box = box.box()
-        record_box.label(text="記録済みOBJデータ")
-        if recorded_objects:
-            record_col = record_box.column(align=True)
-            record_col.ui_units_x = 28
-            for obj_data in recorded_objects:
-                if not isinstance(obj_data, dict):
-                    continue
-                name = str(obj_data.get('name', '') or '')
-                if not name:
-                    continue
-                row = record_col.row(align=True)
-                row.ui_units_x = 28
-                row.scale_y = 0.78
-                op = row.operator("camera.select_recorded_object", text=name, icon='RESTRICT_SELECT_OFF')
-                op.object_name = name
-                exists = bpy.data.objects.get(name) is not None
-                row.enabled = exists
-                if not exists:
-                    row.label(text="なし")
-        else:
-            record_box.label(text="記録済みOBJデータはありません")
+        _draw_recorded_object_data_list(box, context, scene, recorded_objects)
+
     row = box.row()
     row.scale_y = 1.4
     row.operator("camera.save_selected_stock_memo", text="追加データ記録")
 
+
+def _draw_current_selected_object_data_list(layout, context, names):
+    layout.label(text="選択中オブジェクト")
+    if not names:
+        layout.label(text="選択中オブジェクトはありません")
+        return
+
+    wm = context.window_manager
+    if (
+        hasattr(wm, "mpm_selected_object_items_v131")
+        and hasattr(wm, "mpm_selected_object_index_v131")
+    ):
+        try:
+            _sync_current_selected_object_display_items(wm, names)
+            list_row = layout.row(align=True)
+            list_row.template_list(
+                "MPM_UL_selected_object_list_v131", "",
+                wm, "mpm_selected_object_items_v131",
+                wm, "mpm_selected_object_index_v131",
+                rows=4, maxrows=8,
+            )
+            _draw_current_selected_object_list_select_button(layout, wm)
+            return
+        except Exception:
+            pass
+
+    _draw_current_selected_object_compact_fallback(layout, context, names)
+
+
+def _draw_current_selected_object_list_select_button(layout, wm):
+    name = _get_current_selected_object_name_from_list(wm)
+    row = layout.row(align=True)
+    row.enabled = bool(name) and bpy.data.objects.get(name) is not None
+    op = row.operator("camera.select_recorded_object", text="選択", icon='RESTRICT_SELECT_OFF')
+    op.object_name = name
+    op.extend_selection = False
+    op = row.operator("camera.select_recorded_object", text="追加選択", icon='ADD')
+    op.object_name = name
+    op.extend_selection = True
+
+
+def _get_current_selected_object_name_from_list(wm):
+    if not hasattr(wm, "mpm_selected_object_items_v131"):
+        return ""
+    collection = wm.mpm_selected_object_items_v131
+    if len(collection) == 0:
+        return ""
+    try:
+        index = int(getattr(wm, "mpm_selected_object_index_v131", 0) or 0)
+    except Exception:
+        index = 0
+    index = max(0, min(index, len(collection) - 1))
+    try:
+        setattr(wm, "mpm_selected_object_index_v131", index)
+    except Exception:
+        pass
+    item = collection[index]
+    return str(getattr(item, "object_name", "") or "")
+
+
+def _sync_current_selected_object_display_items(wm, names):
+    if not hasattr(wm, "mpm_selected_object_items_v131"):
+        return
+    collection = wm.mpm_selected_object_items_v131
+    current_names = [str(getattr(item, "object_name", "") or "") for item in collection]
+    if current_names != names:
+        while len(collection) > 0:
+            collection.remove(0)
+        for name in names:
+            item = collection.add()
+            item.object_name = name
+    try:
+        index = int(getattr(wm, "mpm_selected_object_index_v131", 0) or 0)
+    except Exception:
+        index = 0
+    if names:
+        index = max(0, min(index, len(names) - 1))
+    else:
+        index = 0
+    try:
+        setattr(wm, "mpm_selected_object_index_v131", index)
+    except Exception:
+        pass
+
+
+def _draw_current_selected_object_compact_fallback(layout, context, names):
+    wm = context.window_manager
+    visible_rows = 4
+    total = len(names)
+    try:
+        offset = int(getattr(wm, "mpm_selected_object_offset_v131", 0) or 0)
+    except Exception:
+        offset = 0
+    max_offset = max(0, total - visible_rows)
+    offset = max(0, min(offset, max_offset))
+    try:
+        setattr(wm, "mpm_selected_object_offset_v131", offset)
+    except Exception:
+        pass
+
+    list_row = layout.row(align=True)
+    col = list_row.column(align=True)
+    for name in names[offset:offset + visible_rows]:
+        row = col.row(align=True)
+        exists = bpy.data.objects.get(name) is not None
+        row.enabled = exists
+        icon_name = 'RESTRICT_SELECT_OFF' if exists else 'ERROR'
+        op = row.operator("camera.select_recorded_object", text=name, icon=icon_name)
+        op.object_name = name
+        op.extend_selection = False
+
+    side = list_row.column(align=True)
+    up = side.operator("camera.selected_object_fallback_scroll", text="", icon='TRIA_UP')
+    up.direction = -1
+    down = side.operator("camera.selected_object_fallback_scroll", text="", icon='TRIA_DOWN')
+    down.direction = 1
+    if total > visible_rows:
+        layout.label(text=f"{offset + 1}-{min(offset + visible_rows, total)} / {total}")
+
+
+def _draw_recorded_object_data_list(layout, context, scene, recorded_objects):
+    record_box = layout.box()
+    record_box.label(text="記録済みOBJデータ")
+    if not recorded_objects:
+        record_box.label(text="記録済みOBJデータはありません")
+        return
+
+    wm = context.window_manager
+    names = _recorded_object_names_from_data(recorded_objects)
+    if not names:
+        record_box.label(text="表示できるOBJ名がありません")
+        return
+
+    if (
+        hasattr(wm, "mpm_recorded_object_items_v130")
+        and hasattr(wm, "mpm_recorded_object_index_v130")
+    ):
+        try:
+            _sync_recorded_object_display_items(wm, names)
+            list_row = record_box.row(align=True)
+            list_row.template_list(
+                "MPM_UL_recorded_object_list_v130", "",
+                wm, "mpm_recorded_object_items_v130",
+                wm, "mpm_recorded_object_index_v130",
+                rows=7, maxrows=12,
+            )
+            _draw_recorded_object_list_select_buttons(record_box, wm)
+            return
+        except Exception:
+            pass
+
+    _draw_recorded_object_compact_fallback(record_box, context, names)
+
+def _draw_recorded_object_list_select_buttons(layout, wm):
+    name = _get_selected_recorded_object_name(wm)
+    row = layout.row(align=True)
+    row.enabled = bool(name) and bpy.data.objects.get(name) is not None
+    op = row.operator("camera.select_recorded_object", text="選択", icon='RESTRICT_SELECT_OFF')
+    op.object_name = name
+    op.extend_selection = False
+    op = row.operator("camera.select_recorded_object", text="追加選択", icon='ADD')
+    op.object_name = name
+    op.extend_selection = True
+
+
+def _get_selected_recorded_object_name(wm):
+    if not hasattr(wm, "mpm_recorded_object_items_v130"):
+        return ""
+    collection = wm.mpm_recorded_object_items_v130
+    if len(collection) == 0:
+        return ""
+    try:
+        index = int(getattr(wm, "mpm_recorded_object_index_v130", 0) or 0)
+    except Exception:
+        index = 0
+    index = max(0, min(index, len(collection) - 1))
+    try:
+        setattr(wm, "mpm_recorded_object_index_v130", index)
+    except Exception:
+        pass
+    item = collection[index]
+    return str(getattr(item, "object_name", "") or "")
+
+
+def _recorded_object_name_from_data(obj_data):
+    if isinstance(obj_data, dict):
+        return str(obj_data.get('name', '') or obj_data.get('object_name', '') or '')
+    if isinstance(obj_data, str):
+        return obj_data
+    return str(getattr(obj_data, "name", "") or '')
+
+
+def _recorded_object_names_from_data(recorded_objects):
+    names = []
+    for obj_data in recorded_objects:
+        name = _recorded_object_name_from_data(obj_data)
+        if name:
+            names.append(name)
+    return names
+
+
+def _sync_recorded_object_display_items(wm, names):
+    if not hasattr(wm, "mpm_recorded_object_items_v130"):
+        return
+    collection = wm.mpm_recorded_object_items_v130
+    current_names = [str(getattr(item, "object_name", "") or "") for item in collection]
+    if current_names != names:
+        while len(collection) > 0:
+            collection.remove(0)
+        for name in names:
+            item = collection.add()
+            item.object_name = name
+    try:
+        index = int(getattr(wm, "mpm_recorded_object_index_v130", 0) or 0)
+    except Exception:
+        index = 0
+    if names:
+        index = max(0, min(index, len(names) - 1))
+    else:
+        index = 0
+    try:
+        setattr(wm, "mpm_recorded_object_index_v130", index)
+    except Exception:
+        pass
+
+
+def _draw_recorded_object_compact_fallback(layout, context, names):
+    wm = context.window_manager
+    visible_rows = 7
+    total = len(names)
+    try:
+        offset = int(getattr(wm, "mpm_recorded_object_offset_v130", 0) or 0)
+    except Exception:
+        offset = 0
+    max_offset = max(0, total - visible_rows)
+    offset = max(0, min(offset, max_offset))
+    try:
+        setattr(wm, "mpm_recorded_object_offset_v130", offset)
+    except Exception:
+        pass
+
+    list_row = layout.row(align=True)
+    col = list_row.column(align=True)
+    for name in names[offset:offset + visible_rows]:
+        row = col.row(align=True)
+        exists = bpy.data.objects.get(name) is not None
+        row.enabled = exists
+        icon_name = 'OBJECT_DATA' if exists else 'ERROR'
+        op = row.operator("camera.select_recorded_object", text=name, icon=icon_name)
+        op.object_name = name
+        op.extend_selection = False
+
+    side = list_row.column(align=True)
+    up = side.operator("camera.recorded_object_fallback_scroll", text="", icon='TRIA_UP')
+    up.direction = -1
+    down = side.operator("camera.recorded_object_fallback_scroll", text="", icon='TRIA_DOWN')
+    down.direction = 1
+    if total > visible_rows:
+        layout.label(text=f"{offset + 1}-{min(offset + visible_rows, total)} / {total}")
 
 def _draw_cycle_controls(layout, context):
     scene = context.scene
@@ -417,6 +712,12 @@ class VIEW3D_PT_custom_panel_misc(bpy.types.Panel):
 
 
 UI_CLASSES = (
+    MPM_RecordedObjectListItemV130,
+    MPM_UL_recorded_object_list_v130,
+    MPM_SelectedObjectListItemV131,
+    MPM_UL_selected_object_list_v131,
+    MPM_OT_recorded_object_fallback_scroll,
+    MPM_OT_selected_object_fallback_scroll,
     VIEW3D_PT_custom_panel,
     VIEW3D_PT_custom_panel_record_read,
     VIEW3D_PT_custom_panel_saved_memo,
@@ -432,8 +733,40 @@ def register_ui():
         VIEW3D_PT_custom_panel.bl_label = PANEL_LABEL
     except Exception:
         pass
+    for attr in (
+        "recorded_object_display_items",
+        "recorded_object_display_index",
+        "recorded_object_list_rows",
+        "recorded_object_list_width",
+        "mpm_recorded_object_items_v129",
+        "mpm_recorded_object_index_v129",
+    ):
+        if hasattr(bpy.types.Scene, attr):
+            try:
+                delattr(bpy.types.Scene, attr)
+            except Exception:
+                pass
+    for attr in (
+        "mpm_recorded_object_items_v130",
+        "mpm_recorded_object_index_v130",
+        "mpm_recorded_object_offset_v130",
+        "mpm_selected_object_items_v131",
+        "mpm_selected_object_index_v131",
+        "mpm_selected_object_offset_v131",
+    ):
+        if hasattr(bpy.types.WindowManager, attr):
+            try:
+                delattr(bpy.types.WindowManager, attr)
+            except Exception:
+                pass
     for cls in UI_CLASSES:
         bpy.utils.register_class(cls)
+    bpy.types.WindowManager.mpm_recorded_object_items_v130 = bpy.props.CollectionProperty(type=MPM_RecordedObjectListItemV130)
+    bpy.types.WindowManager.mpm_recorded_object_index_v130 = bpy.props.IntProperty(default=0, options={'SKIP_SAVE'})
+    bpy.types.WindowManager.mpm_recorded_object_offset_v130 = bpy.props.IntProperty(default=0, min=0, options={'SKIP_SAVE'})
+    bpy.types.WindowManager.mpm_selected_object_items_v131 = bpy.props.CollectionProperty(type=MPM_SelectedObjectListItemV131)
+    bpy.types.WindowManager.mpm_selected_object_index_v131 = bpy.props.IntProperty(default=0, options={'SKIP_SAVE'})
+    bpy.types.WindowManager.mpm_selected_object_offset_v131 = bpy.props.IntProperty(default=0, min=0, options={'SKIP_SAVE'})
     bpy.types.VIEW3D_HT_header.append(draw_header_buttons)
 
 
@@ -442,6 +775,32 @@ def unregister_ui():
         bpy.types.VIEW3D_HT_header.remove(draw_header_buttons)
     except Exception:
         pass
+    for attr in (
+        "recorded_object_display_items",
+        "recorded_object_display_index",
+        "recorded_object_list_rows",
+        "recorded_object_list_width",
+        "mpm_recorded_object_items_v129",
+        "mpm_recorded_object_index_v129",
+    ):
+        if hasattr(bpy.types.Scene, attr):
+            try:
+                delattr(bpy.types.Scene, attr)
+            except Exception:
+                pass
+    for attr in (
+        "mpm_recorded_object_items_v130",
+        "mpm_recorded_object_index_v130",
+        "mpm_recorded_object_offset_v130",
+        "mpm_selected_object_items_v131",
+        "mpm_selected_object_index_v131",
+        "mpm_selected_object_offset_v131",
+    ):
+        if hasattr(bpy.types.WindowManager, attr):
+            try:
+                delattr(bpy.types.WindowManager, attr)
+            except Exception:
+                pass
     for cls in reversed(UI_CLASSES):
         try:
             bpy.utils.unregister_class(cls)
@@ -450,5 +809,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.124
+# Version Footer: 1.131
 # -------------------------------

@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.124）:
-# - 3Dビューのローカルカメラに非カメラOBJが入った場合の誤操作を防止
-# - カメラビュー切替前にローカルカメラ設定を安全化
-# - UIと機能は現状維持
+# 変更点（1.131）:
+# - 選択中オブジェクト一覧も固定高さのUIList表示へ変更
+# - 記録済みOBJデータ一覧のUIList表示は維持
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 124),
+    "version": (1, 0, 131),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -32,5 +31,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.124
+# Version Footer: 1.131
 # -------------------------------
