@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.141）:
-# - 追加データ記録内の小見出しをBlender標準の折りたたみ表示へ統一
+# 変更点（1.144）:
+# - ショートカット項目は維持
 
 import bpy
 
@@ -18,6 +18,7 @@ from .core import (
     _sanitize_view3d_local_cameras,
     PANEL_LABEL,
     _ENUM_CACHE,
+    get_addon_preferences,
 )
 
 from .dolly import (
@@ -691,6 +692,34 @@ def _draw_dolly_controls(layout, context):
         layout.prop(dz, "min_distance", text="最小距離")
 
 
+def _draw_shortcut_settings_controls(layout, context):
+    scene = context.scene
+    prefs = get_addon_preferences()
+
+    box = layout.box()
+    header = box.row(align=True)
+    header.prop(scene, "show_shortcut_settings_section", toggle=True, text="ショートカット項目")
+
+    if not bool(getattr(scene, "show_shortcut_settings_section", False)):
+        return
+
+    sub = box.column(align=True)
+    if prefs is not None:
+        sub.prop(prefs, "disable_shift_arrow_conflicts", text="Shift+矢印の既存割り当てを一時無効化")
+    else:
+        disabled = sub.row()
+        disabled.enabled = False
+        disabled.label(text="Shift+矢印の既存割り当てを一時無効化")
+
+    sub.separator()
+    sub.label(text="ショートカット一覧")
+    sub.label(text="Insert：最新のカメラ位置を呼び出し")
+    sub.label(text="Ctrl + Insert：カメラ位置を保存")
+    sub.label(text="Ctrl + Shift + Insert：下絵を読み込む")
+    sub.label(text="Shift + ←：前のストックデータへ")
+    sub.label(text="Shift + →：次のストックデータへ")
+
+
 def _draw_misc_controls(layout, context):
     scene = context.scene
     layout.prop(scene, "open_output_after_render", text="レンダリング後出力フォルダ開く")
@@ -712,6 +741,9 @@ def _draw_misc_controls(layout, context):
         box.operator("camera.append_stock_data", text="ストックデータ追加読込")
         box.operator("camera.set_output_folder", text="出力フォルダを指定")
         box.operator("camera.set_background_image_folder", text="読込場所を設定")
+        box.separator()
+        _draw_shortcut_settings_controls(box, context)
+        box.separator()
         box.label(text="保存データの管理")
         box.operator("camera.manage_saved_data", text="保存データを管理")
         box.separator()
@@ -930,5 +962,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.141
+# Version Footer: 1.144
 # -------------------------------

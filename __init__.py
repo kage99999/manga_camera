@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.141）:
-# - 追加データ記録内の小見出しをBlender標準の折りたたみ表示へ統一
+# 変更点（1.144）:
+# - チェックOFF時に既存のShift+矢印割り当てが戻るよう修正
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 141),
+    "version": (1, 0, 144),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -30,5 +30,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.141
+# Version Footer: 1.144
 # -------------------------------

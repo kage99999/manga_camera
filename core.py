@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.141）:
-# - UI表示用バージョンを更新
-# - Nパネルのヘッダー表示をVer.1.141へ更新
+# 変更点（1.144）:
+# - Shift+矢印でストック前後移動するショートカットを追加
+# - 設定用のショートカット競合無効化プロパティを追加
+# - Nパネルのヘッダー表示をVer.1.143へ更新
 
 import bpy
 import os
@@ -50,7 +51,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 141)  # 1.141
+    v = (1, 0, 144)  # 1.144
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -366,15 +367,44 @@ def _get_view3d_window_area_region(context):
 # =========================
 # アドオン設定（任意）
 # =========================
+def _on_disable_shift_arrow_conflicts_update(self, context):
+    """設定変更時にShift+矢印の既存割り当て無効化状態を反映する"""
+    try:
+        _sync_shift_arrow_conflict_keymaps()
+    except Exception:
+        pass
+
+
+def get_addon_preferences():
+    """このアドオンのPreferencesを安全に取得する"""
+    try:
+        addon = bpy.context.preferences.addons.get(ADDON_PACKAGE_NAME)
+        return addon.preferences if addon else None
+    except Exception:
+        return None
+
+
 class CameraPositionManagerPreferences(bpy.types.AddonPreferences):
     bl_idname = ADDON_PACKAGE_NAME
+
+    disable_shift_arrow_conflicts: bpy.props.BoolProperty(
+        name="Shift+矢印の既存割り当てを一時無効化",
+        description="ONの間だけ、Shift+←/→と競合する既存キーマップを一時無効化し、このアドオンのストック移動ショートカットを優先します",
+        default=True,
+        update=_on_disable_shift_arrow_conflicts_update,
+    )
+
     def draw(self, context):
         layout = self.layout
         layout.label(text="ショートカット（任意）")
         box = layout.box()
+        box.prop(self, "disable_shift_arrow_conflicts", text="Shift+矢印の既存割り当てを一時無効化")
+        box.separator()
         box.label(text="Insert : 最新のカメラ位置を呼び出し")
         box.label(text="Ctrl + Insert : カメラ位置を保存")
         box.label(text="Ctrl + Shift + Insert : 下絵を読み込む")
+        box.label(text="Shift + ← : 前のストックデータへ")
+        box.label(text="Shift + → : 次のストックデータへ")
 
 # =========================
 # データ管理
@@ -1461,6 +1491,12 @@ def register_scene_simple_properties():
     bpy.types.Scene.show_background_section = bpy.props.BoolProperty(
         name="下絵", description="下絵の設定を表示", default=True
     )
+    bpy.types.Scene.show_shortcut_settings_section = bpy.props.BoolProperty(
+        name="ショートカット項目",
+        description="設定内のショートカット項目を表示します",
+        default=False,
+        options={'SKIP_SAVE'},
+    )
     bpy.types.Scene.open_output_after_render = bpy.props.BoolProperty(
         name="レンダリング後出力フォルダ開く",
         description="レンダリング完了時にBlenderを最小化して出力フォルダを開く",
@@ -1532,7 +1568,7 @@ def unregister_camera_sync_properties():
         delattr(bpy.types.Camera, "mpm_bg_visible")
 
 def unregister_scene_simple_properties():
-    for attr in ("saved_camera_index", "show_settings", "show_background_section", "open_output_after_render", "bg_cycle_skip_stocked", "saved_memo_text", "record_selected_objects"):
+    for attr in ("saved_camera_index", "show_settings", "show_background_section", "show_shortcut_settings_section", "open_output_after_render", "bg_cycle_skip_stocked", "saved_memo_text", "record_selected_objects"):
         if hasattr(bpy.types.Scene, attr):
             delattr(bpy.types.Scene, attr)
 
@@ -1657,11 +1693,19 @@ CLASSES = (
 )
 
 addon_keymaps = []
+addon_shift_arrow_keymaps = []
+_disabled_shift_arrow_keymaps = []
 _KEYMAP_REGISTRATION_PENDING = False
+_STOCK_SHIFT_ARROW_OPERATOR_IDS = {
+    "camera.prev_saved_stock",
+    "camera.next_saved_stock",
+}
 _KEYMAP_OPERATOR_IDS = {
     "camera.recall_position",
     "camera.save_position",
     "camera.load_background_image",
+    "camera.prev_saved_stock",
+    "camera.next_saved_stock",
 }
 
 
@@ -1673,6 +1717,7 @@ def _clear_tracked_keymaps():
         except Exception:
             pass
     addon_keymaps.clear()
+    addon_shift_arrow_keymaps.clear()
 
 
 def _remove_duplicate_addon_keymaps(kc):
@@ -1680,16 +1725,137 @@ def _remove_duplicate_addon_keymaps(kc):
     if kc is None:
         return
     for km in getattr(kc, "keymaps", []):
-        if getattr(km, "name", "") != "3D View":
-            continue
-        if getattr(km, "space_type", None) != 'VIEW_3D':
-            continue
         for kmi in list(getattr(km, "keymap_items", [])):
             try:
                 if getattr(kmi, "idname", "") in _KEYMAP_OPERATOR_IDS:
                     km.keymap_items.remove(kmi)
             except Exception:
                 pass
+
+
+def _restore_disabled_shift_arrow_keymaps():
+    """このアドオンが一時無効化したShift+矢印キーマップだけ元の状態へ戻す"""
+    for _kc_name, _km_name, _idname, kmi, was_active in list(_disabled_shift_arrow_keymaps):
+        try:
+            kmi.active = bool(was_active)
+        except Exception:
+            pass
+    _disabled_shift_arrow_keymaps.clear()
+    _refresh_keyconfigs()
+
+
+def _set_addon_shift_arrow_keymaps_active(active):
+    """このアドオン自身のShift+矢印キーマップだけ有効／無効を切り替える"""
+    for _km, kmi in list(addon_shift_arrow_keymaps):
+        try:
+            kmi.active = bool(active)
+        except Exception:
+            pass
+    _refresh_keyconfigs()
+
+
+def _is_exact_shift_arrow_keymap_item(kmi):
+    """Shift+←/→の既存キーマップか判定する（フレーム移動系の取りこぼしを減らす）"""
+    try:
+        # このアドオン自身の前後ストック移動は競合扱いしない
+        if getattr(kmi, "idname", "") in _STOCK_SHIFT_ARROW_OPERATOR_IDS:
+            return False
+        # 対象キーは左右矢印だけ
+        if getattr(kmi, "type", "") not in {'LEFT_ARROW', 'RIGHT_ARROW'}:
+            return False
+        # 基本は押下イベントを対象にする。Blender側の表現差を考慮してANYも許可する。
+        if getattr(kmi, "value", "PRESS") not in {'PRESS', 'ANY'}:
+            return False
+        # Shiftが関係する割り当てだけを対象にする。
+        shift_flag = bool(getattr(kmi, "shift", False))
+        key_modifier = str(getattr(kmi, "key_modifier", "NONE"))
+        if not shift_flag and key_modifier not in {'LEFT_SHIFT', 'RIGHT_SHIFT'}:
+            return False
+        # Ctrl/Alt/OSキー併用のショートカットは、今回のShift+矢印とは別物として触らない。
+        if bool(getattr(kmi, "ctrl", False)):
+            return False
+        if bool(getattr(kmi, "alt", False)):
+            return False
+        if bool(getattr(kmi, "oskey", False)):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _refresh_keyconfigs():
+    """キーマップ変更をBlender側へ反映させる"""
+    try:
+        bpy.context.window_manager.keyconfigs.update()
+    except Exception:
+        pass
+
+
+def _iter_existing_shift_arrow_conflict_keymaps():
+    """既存側のShift+矢印キーマップ候補を列挙する"""
+    try:
+        wm = bpy.context.window_manager
+        keyconfigs = []
+        if getattr(wm.keyconfigs, "user", None) is not None:
+            keyconfigs.append(wm.keyconfigs.user)
+        if getattr(wm.keyconfigs, "default", None) is not None:
+            keyconfigs.append(wm.keyconfigs.default)
+    except Exception:
+        return
+
+    seen = set()
+    for kc in keyconfigs:
+        for km in getattr(kc, "keymaps", []):
+            for kmi in getattr(km, "keymap_items", []):
+                try:
+                    ident = id(kmi)
+                    if ident in seen:
+                        continue
+                    seen.add(ident)
+                    if _is_exact_shift_arrow_keymap_item(kmi):
+                        yield kc, km, kmi
+                except Exception:
+                    continue
+
+
+def _sync_shift_arrow_conflict_keymaps():
+    """設定に応じてShift+矢印の既存割り当てを一時無効化／復元する"""
+    _restore_disabled_shift_arrow_keymaps()
+    prefs = get_addon_preferences()
+
+    # チェックOFF時は、既存割り当てを復元するだけでなく、
+    # アドオン側のShift+矢印キーマップも一時停止する。
+    # これをしないと、既存キーマップを戻してもアドオン側が先に反応してしまう。
+    if prefs is None or not bool(getattr(prefs, "disable_shift_arrow_conflicts", False)):
+        _set_addon_shift_arrow_keymaps_active(False)
+        _refresh_keyconfigs()
+        return
+
+    _set_addon_shift_arrow_keymaps_active(True)
+    for kc, km, kmi in _iter_existing_shift_arrow_conflict_keymaps() or []:
+        try:
+            was_active = bool(getattr(kmi, "active", True))
+            if not was_active:
+                continue
+            kmi.active = False
+            _disabled_shift_arrow_keymaps.append((
+                str(getattr(kc, "name", "")),
+                str(getattr(km, "name", "")),
+                str(getattr(kmi, "idname", "")),
+                kmi,
+                was_active,
+            ))
+        except Exception:
+            pass
+    _refresh_keyconfigs()
+
+
+def _new_keymap_item_prefer_head(km, operator_id, event_type, *, shift=False, ctrl=False, alt=False):
+    """可能ならkeymap先頭へ登録し、既存フレーム移動より優先されやすくする"""
+    try:
+        return km.keymap_items.new(operator_id, type=event_type, value='PRESS', shift=shift, ctrl=ctrl, alt=alt, head=True)
+    except TypeError:
+        return km.keymap_items.new(operator_id, type=event_type, value='PRESS', shift=shift, ctrl=ctrl, alt=alt)
 
 
 def _register_addon_keymaps_impl():
@@ -1708,11 +1874,40 @@ def _register_addon_keymaps_impl():
     _remove_duplicate_addon_keymaps(kc)
 
     try:
-        km = kc.keymaps.new(name="3D View", space_type='VIEW_3D')
-        kmi1 = km.keymap_items.new("camera.recall_position", type='INSERT', value='PRESS')
-        kmi2 = km.keymap_items.new("camera.save_position", type='INSERT', value='PRESS', ctrl=True)
-        kmi3 = km.keymap_items.new("camera.load_background_image", type='INSERT', value='PRESS', ctrl=True, shift=True)
-        addon_keymaps.extend([(km, kmi1), (km, kmi2), (km, kmi3)])
+        km_view = kc.keymaps.new(name="3D View", space_type='VIEW_3D')
+        kmi1 = _new_keymap_item_prefer_head(km_view, "camera.recall_position", 'INSERT')
+        kmi2 = _new_keymap_item_prefer_head(km_view, "camera.save_position", 'INSERT', ctrl=True)
+        kmi3 = _new_keymap_item_prefer_head(km_view, "camera.load_background_image", 'INSERT', ctrl=True, shift=True)
+
+        addon_keymaps.extend([
+            (km_view, kmi1),
+            (km_view, kmi2),
+            (km_view, kmi3),
+        ])
+
+        # Shift+矢印はフレーム移動系の標準キーマップと競合しやすいので、
+        # WindowだけでなくFrames/Screen/3D Viewにも登録して取りこぼしを減らす。
+        stock_keymap_specs = [
+            ("Window", 'EMPTY'),
+            ("Frames", 'EMPTY'),
+            ("Screen", 'EMPTY'),
+            ("3D View", 'VIEW_3D'),
+        ]
+        for km_name, space_type in stock_keymap_specs:
+            km_stock = kc.keymaps.new(name=km_name, space_type=space_type)
+            kmi_prev = _new_keymap_item_prefer_head(km_stock, "camera.prev_saved_stock", 'LEFT_ARROW', shift=True)
+            kmi_next = _new_keymap_item_prefer_head(km_stock, "camera.next_saved_stock", 'RIGHT_ARROW', shift=True)
+            addon_keymaps.extend([
+                (km_stock, kmi_prev),
+                (km_stock, kmi_next),
+            ])
+            addon_shift_arrow_keymaps.extend([
+                (km_stock, kmi_prev),
+                (km_stock, kmi_next),
+            ])
+
+        _sync_shift_arrow_conflict_keymaps()
+        _refresh_keyconfigs()
     except Exception:
         _clear_tracked_keymaps()
     return None
@@ -1769,6 +1964,7 @@ def unregister_core():
     # キーマップ撤去
     _KEYMAP_REGISTRATION_PENDING = False
     _clear_tracked_keymaps()
+    _restore_disabled_shift_arrow_keymaps()
     try:
         wm = bpy.context.window_manager
         kc = wm.keyconfigs.addon if wm else None
@@ -1792,5 +1988,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.141
+# Version Footer: 1.144
 # -------------------------------
