@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.144）:
-# - Shift+矢印でストック前後移動するショートカットを追加
-# - 設定用のショートカット競合無効化プロパティを追加
-# - Nパネルのヘッダー表示をVer.1.143へ更新
+# 変更点（1.146）:
+# - 記録済みOBJデータ欄のクリック選択同期を追加
 
 import bpy
 import os
@@ -51,7 +49,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 144)  # 1.144
+    v = (1, 0, 146)  # 1.146
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -692,6 +690,57 @@ class OBJECT_OT_save_camera_position(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def _get_recorded_object_delete_candidate_names_from_ui(context) -> set[str]:
+    wm = getattr(context, "window_manager", None)
+    if wm is None or not hasattr(wm, "mpm_recorded_object_items_v130"):
+        return set()
+    names = set()
+    try:
+        for item in wm.mpm_recorded_object_items_v130:
+            if bool(getattr(item, "delete_candidate", False)):
+                name = str(getattr(item, "object_name", "") or "")
+                if name:
+                    names.add(name)
+    except Exception:
+        return set()
+    return names
+
+
+def _clear_recorded_object_delete_candidates_from_ui(context):
+    wm = getattr(context, "window_manager", None)
+    if wm is None or not hasattr(wm, "mpm_recorded_object_items_v130"):
+        return
+    try:
+        for item in wm.mpm_recorded_object_items_v130:
+            item.delete_candidate = False
+    except Exception:
+        pass
+
+
+def _recorded_object_name_from_saved_data(obj_data) -> str:
+    if isinstance(obj_data, dict):
+        return str(obj_data.get('name', '') or obj_data.get('object_name', '') or '')
+    if isinstance(obj_data, str):
+        return obj_data
+    return str(getattr(obj_data, "name", "") or '')
+
+
+def _build_item_with_recorded_object_deletions(scene, existing_item: dict, delete_candidate_names: set[str]) -> dict:
+    new_item = dict(existing_item)
+    existing_objects = existing_item.get('selected_objects', [])
+    filtered_objects = []
+    if isinstance(existing_objects, list):
+        for obj_data in existing_objects:
+            name = _recorded_object_name_from_saved_data(obj_data)
+            if name and name in delete_candidate_names:
+                continue
+            filtered_objects.append(obj_data)
+    new_item['memo'] = str(getattr(scene, 'saved_memo_text', '') or '')
+    new_item['selected_objects'] = filtered_objects
+    new_item['record_selected_objects'] = bool(filtered_objects)
+    return new_item
+
+
 class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
     bl_idname = "camera.save_selected_stock_memo"
     bl_label = "追加データ記録"
@@ -714,8 +763,26 @@ class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
             self.report({'WARNING'}, "無効なストックです")
             return {'CANCELLED'}
 
-        current_item = _build_current_camera_saved_item(scene, camera)
         existing = dict(saved_items[index])
+        delete_candidate_names = _get_recorded_object_delete_candidate_names_from_ui(context)
+        if delete_candidate_names:
+            current_item = _build_item_with_recorded_object_deletions(scene, existing, delete_candidate_names)
+            existing_normalized = _normalized_without_created_at(existing)
+            current_normalized = _normalized_without_created_at(current_item)
+            if existing_normalized == current_normalized:
+                self.report({'INFO'}, "削除候補による変更はありませんでした")
+                return {'CANCELLED'}
+            result = _save_current_item_as_stock(
+                scene,
+                manager,
+                current_item,
+                overwrite_index=index,
+            )
+            _clear_recorded_object_delete_candidates_from_ui(context)
+            self.report({'INFO'}, "削除候補を反映して追加データを上書き保存しました")
+            return {'FINISHED'}
+
+        current_item = _build_current_camera_saved_item(scene, camera)
         existing_normalized = _normalized_without_created_at(existing)
         current_normalized = _normalized_without_created_at(current_item)
         if existing_normalized == current_normalized:
@@ -788,6 +855,23 @@ class OBJECT_OT_select_recorded_object(bpy.types.Operator):
         except Exception as e:
             self.report({'ERROR'}, f"オブジェクト選択に失敗しました: {e}")
             return {'CANCELLED'}
+
+        # UIList行をクリックした場合でも、記録済みOBJデータ欄の選択行をクリック対象へ同期する
+        try:
+            wm = context.window_manager
+            if hasattr(wm, "mpm_recorded_object_items_v130") and hasattr(wm, "mpm_recorded_object_index_v130"):
+                for idx, item in enumerate(wm.mpm_recorded_object_items_v130):
+                    if str(getattr(item, "object_name", "") or "") == name:
+                        wm.mpm_recorded_object_index_v130 = idx
+                        break
+        except Exception:
+            pass
+
+        try:
+            if context.area:
+                context.area.tag_redraw()
+        except Exception:
+            pass
 
         if bool(getattr(self, "extend_selection", False)):
             self.report({'INFO'}, f"オブジェクトを追加選択しました: {name}")
@@ -1515,7 +1599,7 @@ def register_scene_simple_properties():
     )
     bpy.types.Scene.record_selected_objects = bpy.props.BoolProperty(
         name="選択OBJデータ",
-        description="ON のとき、選択中オブジェクトの位置・回転・サイズを記録データへ含めます",
+        description="ON のとき、選択中OBJの位置・回転・サイズを記録データへ含めます",
         default=False,
     )
 
@@ -1988,5 +2072,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.144
+# Version Footer: 1.146
 # -------------------------------

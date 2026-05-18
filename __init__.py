@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.144）:
-# - チェックOFF時に既存のShift+矢印割り当てが戻るよう修正
+# 変更点（1.146）:
+# - 記録済みOBJデータ欄のクリック選択同期を追加
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 144),
+    "version": (1, 0, 146),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -30,5 +30,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.144
+# Version Footer: 1.146
 # -------------------------------
