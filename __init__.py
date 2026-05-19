@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.154）:
-# - 登録OBJ一覧のチェック削除候補化とクリック選択を追加
+# 変更点（1.158）:
+# - ラティス管理セクションの見間違い防止用に「選択中OBJ」「登録OBJ」表記を変更
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 154),
+    "version": (1, 0, 158),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -33,5 +33,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.154
+# Version Footer: 1.158
 # -------------------------------

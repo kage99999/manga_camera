@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.154）:
-# - ラティス管理の登録OBJチェック削除候補化とクリック選択を追加
+# 変更点（1.158）:
+# - ラティス管理セクションの見間違い防止用に「選択中OBJ」「登録OBJ」表記を変更
 
 import bpy
 import os
@@ -49,7 +49,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 154)  # 1.154
+    v = (1, 0, 158)  # 1.158
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -725,6 +725,65 @@ def _recorded_object_name_from_saved_data(obj_data) -> str:
     return str(getattr(obj_data, "name", "") or '')
 
 
+def _selected_object_data_from_context(context, camera, excluded_names: set[str] | None = None) -> list[dict]:
+    excluded_names = set(excluded_names or set())
+    selected_objects = []
+    seen = set()
+    for obj in (getattr(context, 'selected_objects', []) or []):
+        if obj is None or obj == camera:
+            continue
+        name = str(getattr(obj, 'name', '') or '')
+        if not name or name in excluded_names or name in seen:
+            continue
+        seen.add(name)
+        selected_objects.append({
+            'name': name,
+            'location': list(obj.location),
+            'rotation': list(obj.rotation_euler),
+            'scale': list(obj.scale),
+        })
+    return selected_objects
+
+
+def _merge_recorded_object_data(existing_item: dict, selected_object_data: list[dict], delete_candidate_names: set[str]) -> list[dict]:
+    delete_candidate_names = set(delete_candidate_names or set())
+    selected_by_name = {
+        _recorded_object_name_from_saved_data(obj_data): obj_data
+        for obj_data in (selected_object_data or [])
+        if _recorded_object_name_from_saved_data(obj_data)
+    }
+    merged = []
+    used_names = set()
+    existing_objects = existing_item.get('selected_objects', [])
+    if isinstance(existing_objects, list):
+        for obj_data in existing_objects:
+            name = _recorded_object_name_from_saved_data(obj_data)
+            if not name or name in delete_candidate_names:
+                continue
+            if name in selected_by_name:
+                merged.append(selected_by_name[name])
+            else:
+                merged.append(obj_data)
+            used_names.add(name)
+    for name, obj_data in selected_by_name.items():
+        if name and name not in used_names and name not in delete_candidate_names:
+            merged.append(obj_data)
+            used_names.add(name)
+    return merged
+
+
+def _build_item_with_recorded_object_delta(context, scene, camera, existing_item: dict, base_item: dict, delete_candidate_names: set[str]) -> dict:
+    new_item = dict(base_item)
+    selected_object_data = []
+    if bool(getattr(scene, 'record_selected_objects', False)):
+        selected_object_data = _selected_object_data_from_context(context, camera, excluded_names=delete_candidate_names)
+    merged_objects = _merge_recorded_object_data(existing_item, selected_object_data, delete_candidate_names)
+    new_item['memo'] = str(getattr(scene, 'saved_memo_text', '') or '')
+    new_item['selected_objects'] = merged_objects
+    new_item['record_selected_objects'] = bool(merged_objects)
+    return new_item
+
+
 def _build_item_with_recorded_object_deletions(scene, existing_item: dict, delete_candidate_names: set[str]) -> dict:
     new_item = dict(existing_item)
     existing_objects = existing_item.get('selected_objects', [])
@@ -765,24 +824,18 @@ class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
 
         existing = dict(saved_items[index])
         delete_candidate_names = _get_recorded_object_delete_candidate_names_from_ui(context)
-        if delete_candidate_names:
-            current_item = _build_item_with_recorded_object_deletions(scene, existing, delete_candidate_names)
-            existing_normalized = _normalized_without_created_at(existing)
-            current_normalized = _normalized_without_created_at(current_item)
-            if existing_normalized == current_normalized:
-                self.report({'INFO'}, "削除候補による変更はありませんでした")
-                return {'CANCELLED'}
-            result = _save_current_item_as_stock(
-                scene,
-                manager,
-                current_item,
-                overwrite_index=index,
-            )
-            _clear_recorded_object_delete_candidates_from_ui(context)
-            self.report({'INFO'}, "削除候補を反映して追加データを上書き保存しました")
-            return {'FINISHED'}
 
         current_item = _build_current_camera_saved_item(scene, camera)
+        if delete_candidate_names or bool(getattr(scene, 'record_selected_objects', False)):
+            current_item = _build_item_with_recorded_object_delta(
+                context,
+                scene,
+                camera,
+                existing,
+                current_item,
+                delete_candidate_names,
+            )
+
         existing_normalized = _normalized_without_created_at(existing)
         current_normalized = _normalized_without_created_at(current_item)
         if existing_normalized == current_normalized:
@@ -800,8 +853,10 @@ class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
             self.report({'INFO'}, "同じ設定・同じ追加データのため記録しませんでした")
             return {'CANCELLED'}
         if result == 'overwrite':
-            self.report({'INFO'}, "選択中ストックへ追加データを上書き保存しました")
+            _clear_recorded_object_delete_candidates_from_ui(context)
+            self.report({'INFO'}, "選択中ストックへ追加データを追加・更新保存しました")
         else:
+            _clear_recorded_object_delete_candidates_from_ui(context)
             self.report({'INFO'}, "カメラ位置を保存しました")
         return {'FINISHED'}
 
@@ -839,19 +894,27 @@ class OBJECT_OT_select_recorded_object(bpy.types.Operator):
         except Exception:
             pass
 
-        if not bool(getattr(self, "extend_selection", False)):
-            try:
-                bpy.ops.object.select_all(action='DESELECT')
-            except Exception:
-                for selected in list(getattr(context, "selected_objects", []) or []):
-                    try:
-                        selected.select_set(False)
-                    except Exception:
-                        pass
-
         try:
-            obj.select_set(True)
-            context.view_layer.objects.active = obj
+            if bool(getattr(self, "extend_selection", False)):
+                currently_selected = bool(obj.select_get())
+                obj.select_set(not currently_selected)
+                if not currently_selected:
+                    context.view_layer.objects.active = obj
+                else:
+                    selected_after = [candidate for candidate in (getattr(context, "selected_objects", []) or []) if candidate is not None]
+                    if selected_after:
+                        context.view_layer.objects.active = selected_after[-1]
+            else:
+                try:
+                    bpy.ops.object.select_all(action='DESELECT')
+                except Exception:
+                    for selected in list(getattr(context, "selected_objects", []) or []):
+                        try:
+                            selected.select_set(False)
+                        except Exception:
+                            pass
+                obj.select_set(True)
+                context.view_layer.objects.active = obj
         except Exception as e:
             self.report({'ERROR'}, f"オブジェクト選択に失敗しました: {e}")
             return {'CANCELLED'}
@@ -2072,5 +2135,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.154
+# Version Footer: 1.158
 # -------------------------------

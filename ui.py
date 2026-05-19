@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.154）:
-# - ラティス管理の登録OBJチェック削除候補化とクリック選択を追加
+# 変更点（1.158）:
+# - ラティス管理セクションの見間違い防止用に「選択中OBJ」「登録OBJ」表記を変更
 
 import bpy
 
@@ -40,8 +40,10 @@ class MPM_UL_recorded_object_list_v130(bpy.types.UIList):
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index=0):
         name = str(getattr(item, "object_name", "") or "")
-        exists = bool(name) and bpy.data.objects.get(name) is not None
+        obj = bpy.data.objects.get(name) if name else None
+        exists = obj is not None
         is_delete_candidate = bool(getattr(item, "delete_candidate", False))
+        is_view_selected = bool(obj.select_get()) if obj is not None else False
         icon_name = 'OBJECT_DATA' if exists else 'ERROR'
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
             row = layout.row(align=True)
@@ -51,11 +53,11 @@ class MPM_UL_recorded_object_list_v130(bpy.types.UIList):
                 op.extend_selection = False
             else:
                 row.label(text=name if name else "名称なし", icon=icon_name)
-            if is_delete_candidate:
-                mark = row.row(align=True)
-                mark.alignment = 'RIGHT'
-                mark.alert = True
-                mark.label(text="削除候補")
+            if is_view_selected:
+                selected_mark = row.row(align=True)
+                selected_mark.enabled = False
+                selected_mark.label(text="選択中", icon='RESTRICT_SELECT_OFF')
+            # 追加データ記録では削除候補方式を使わないため、候補表示は行いません。
         elif self.layout_type == 'GRID':
             layout.alignment = 'CENTER'
             layout.label(text="", icon=icon_name)
@@ -127,8 +129,26 @@ class MPM_OT_toggle_additional_data_subsection(bpy.types.Operator):
 
 class MPM_OT_mark_recorded_object_delete_candidate(bpy.types.Operator):
     bl_idname = "camera.mark_recorded_object_delete_candidate"
-    bl_label = "記録から削除"
-    bl_description = "選択中の記録済みOBJを削除候補にします。追加データ記録で保存データに反映されます"
+    bl_label = "記録済みOBJから削除"
+    bl_description = "選択中または一覧で選択中のOBJを、現在の保存データの記録済みOBJから即時削除します。Blender上のOBJ本体は削除しません"
+
+    def execute(self, context):
+        names_to_remove = _get_recorded_object_action_target_names(context)
+        if not names_to_remove:
+            self.report({'WARNING'}, "削除する記録済みOBJがありません")
+            return {'CANCELLED'}
+        removed = _remove_recorded_objects_from_current_stock(context, names_to_remove)
+        if removed <= 0:
+            self.report({'WARNING'}, "記録済みOBJから削除できる対象がありません")
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"記録済みOBJから削除しました: {removed}")
+        return {'FINISHED'}
+
+
+class MPM_OT_cancel_recorded_object_delete_candidate(bpy.types.Operator):
+    bl_idname = "camera.cancel_recorded_object_delete_candidate"
+    bl_label = "削除取消"
+    bl_description = "3Dビュー上で選択中の削除候補だけを通常状態に戻します"
 
     def execute(self, context):
         wm = context.window_manager
@@ -136,23 +156,35 @@ class MPM_OT_mark_recorded_object_delete_candidate(bpy.types.Operator):
             self.report({'WARNING'}, "記録済みOBJリストがありません")
             return {'CANCELLED'}
         collection = wm.mpm_recorded_object_items_v130
-        if len(collection) == 0:
-            self.report({'WARNING'}, "記録済みOBJデータがありません")
+        selected_names = {
+            str(obj.name)
+            for obj in (getattr(context, "selected_objects", []) or [])
+            if obj is not None
+        }
+        cancelled = 0
+        for item in collection:
+            name = str(getattr(item, "object_name", "") or "")
+            if name and name in selected_names and bool(getattr(item, "delete_candidate", False)):
+                item.delete_candidate = False
+                cancelled += 1
+        if cancelled <= 0:
+            self.report({'WARNING'}, "選択中の削除候補OBJがありません")
             return {'CANCELLED'}
-        try:
-            index = int(getattr(wm, "mpm_recorded_object_index_v130", 0) or 0)
-        except Exception:
-            index = 0
-        if not (0 <= index < len(collection)):
-            self.report({'WARNING'}, "削除対象が選択されていません")
+        self.report({'INFO'}, f"削除候補を取り消しました: {cancelled}")
+        return {'FINISHED'}
+
+
+class MPM_OT_select_all_recorded_objects(bpy.types.Operator):
+    bl_idname = "camera.delete_all_recorded_objects"
+    bl_label = "記録済みOBJを全削除"
+    bl_description = "現在の保存データの記録済みOBJデータを空にします。摘要メモとBlender上のOBJ本体は削除しません"
+
+    def execute(self, context):
+        removed = _clear_recorded_objects_from_current_stock(context)
+        if removed <= 0:
+            self.report({'WARNING'}, "削除できる記録済みOBJデータがありません")
             return {'CANCELLED'}
-        item = collection[index]
-        name = str(getattr(item, "object_name", "") or "")
-        if not name:
-            self.report({'WARNING'}, "削除対象のOBJ名がありません")
-            return {'CANCELLED'}
-        item.delete_candidate = True
-        self.report({'INFO'}, f"削除候補にしました: {name}")
+        self.report({'INFO'}, f"記録済みOBJデータを全削除しました: {removed}")
         return {'FINISHED'}
 
 
@@ -566,11 +598,125 @@ def _draw_recorded_object_data_list(layout, context, scene, recorded_objects):
 
     _draw_recorded_object_compact_fallback(record_box, context, names)
 
+
+def _get_recorded_object_action_target_names(context):
+    wm = getattr(context, "window_manager", None)
+    if wm is None or not hasattr(wm, "mpm_recorded_object_items_v130"):
+        return []
+    collection = wm.mpm_recorded_object_items_v130
+    recorded_names = [str(getattr(item, "object_name", "") or "") for item in collection]
+    recorded_name_set = {name for name in recorded_names if name}
+
+    selected_names = []
+    seen = set()
+    for obj in (getattr(context, "selected_objects", []) or []):
+        name = str(getattr(obj, "name", "") or "")
+        if name and name in recorded_name_set and name not in seen:
+            selected_names.append(name)
+            seen.add(name)
+    if selected_names:
+        return selected_names
+
+    current_name = _get_selected_recorded_object_name(wm)
+    return [current_name] if current_name else []
+
+
+def _get_current_saved_item_for_recorded_edit(context):
+    scene = context.scene
+    manager = get_camera_data_manager()
+    saved_items = getattr(manager, "saved_camera_data", []) or []
+    if not saved_items:
+        return None, None, -1, None
+    index = _safe_saved_index(scene, manager)
+    if not (0 <= index < len(saved_items)):
+        return manager, saved_items, index, None
+    item = saved_items[index]
+    if not isinstance(item, dict):
+        item = dict(item or {})
+    else:
+        item = dict(item)
+    return manager, saved_items, index, item
+
+
+def _apply_recorded_object_edit_to_current_stock(context, new_recorded_objects):
+    scene = context.scene
+    manager, saved_items, index, item = _get_current_saved_item_for_recorded_edit(context)
+    if manager is None or item is None or not (0 <= index < len(saved_items)):
+        return False
+    item["selected_objects"] = list(new_recorded_objects or [])
+    item["record_selected_objects"] = bool(item["selected_objects"])
+    item["memo"] = str(getattr(scene, "saved_memo_text", "") or item.get("memo", "") or "")
+    saved_items[index] = item
+    manager.saved_camera_data = saved_items
+    manager.save_data()
+    rebuild_enum_cache(manager)
+    ensure_valid_saved_enum(scene, manager)
+    _sync_scene_saved_memo(scene, manager)
+    try:
+        wm = context.window_manager
+        if hasattr(wm, "mpm_recorded_object_items_v130"):
+            while len(wm.mpm_recorded_object_items_v130) > 0:
+                wm.mpm_recorded_object_items_v130.remove(0)
+        if hasattr(wm, "mpm_recorded_object_source_index_v145"):
+            wm.mpm_recorded_object_source_index_v145 = -1
+        if hasattr(wm, "mpm_recorded_object_index_v130"):
+            wm.mpm_recorded_object_index_v130 = 0
+    except Exception:
+        pass
+    try:
+        if context.area:
+            context.area.tag_redraw()
+    except Exception:
+        pass
+    return True
+
+
+def _remove_recorded_objects_from_current_stock(context, names_to_remove):
+    remove_set = {str(name) for name in (names_to_remove or []) if str(name)}
+    if not remove_set:
+        return 0
+    manager, saved_items, index, item = _get_current_saved_item_for_recorded_edit(context)
+    if item is None:
+        return 0
+    current_objects = item.get("selected_objects", [])
+    if not isinstance(current_objects, list):
+        return 0
+    remaining = []
+    removed = 0
+    for obj_data in current_objects:
+        name = _recorded_object_name_from_data(obj_data)
+        if name and name in remove_set:
+            removed += 1
+            continue
+        remaining.append(obj_data)
+    if removed <= 0:
+        return 0
+    if not _apply_recorded_object_edit_to_current_stock(context, remaining):
+        return 0
+    return removed
+
+
+def _clear_recorded_objects_from_current_stock(context):
+    manager, saved_items, index, item = _get_current_saved_item_for_recorded_edit(context)
+    if item is None:
+        return 0
+    current_objects = item.get("selected_objects", [])
+    removed = len(current_objects) if isinstance(current_objects, list) else 0
+    if removed <= 0:
+        return 0
+    if not _apply_recorded_object_edit_to_current_stock(context, []):
+        return 0
+    return removed
+
 def _draw_recorded_object_delete_button(layout, wm):
     name = _get_selected_recorded_object_name(wm)
-    row = layout.row(align=True)
-    row.enabled = bool(name)
-    row.operator("camera.mark_recorded_object_delete_candidate", text="記録から削除", icon='TRASH')
+    delete_row = layout.row(align=True)
+    delete_row.enabled = bool(name)
+    delete_row.operator("camera.mark_recorded_object_delete_candidate", text="記録済みOBJから削除", icon='TRASH')
+
+    clear_row = layout.row(align=True)
+    clear_row.enabled = bool(name)
+    clear_row.operator("camera.delete_all_recorded_objects", text="記録済みOBJを全削除", icon='X')
 
 
 def _get_selected_recorded_object_name(wm):
@@ -623,11 +769,7 @@ def _sync_recorded_object_display_items(wm, names, source_index=None):
     except Exception:
         next_source_index = -1
     if current_names != names or current_source_index != next_source_index:
-        previous_candidates = {
-            str(getattr(item, "object_name", "") or "")
-            for item in collection
-            if bool(getattr(item, "delete_candidate", False))
-        } if current_source_index == next_source_index else set()
+        previous_candidates = set()
         while len(collection) > 0:
             collection.remove(0)
         for name in names:
@@ -677,6 +819,9 @@ def _draw_recorded_object_compact_fallback(layout, context, names):
         op = row.operator("camera.select_recorded_object", text=name, icon=icon_name)
         op.object_name = name
         op.extend_selection = False
+        obj = bpy.data.objects.get(name)
+        if obj is not None and bool(obj.select_get()):
+            row.label(text="選択中", icon='RESTRICT_SELECT_OFF')
 
     side = list_row.column(align=True)
     up = side.operator("camera.recorded_object_fallback_scroll", text="", icon='TRIA_UP')
@@ -919,6 +1064,8 @@ UI_CLASSES = (
     MPM_OT_selected_object_fallback_scroll,
     MPM_OT_toggle_additional_data_subsection,
     MPM_OT_mark_recorded_object_delete_candidate,
+    MPM_OT_cancel_recorded_object_delete_candidate,
+    MPM_OT_select_all_recorded_objects,
     VIEW3D_PT_custom_panel,
     VIEW3D_PT_custom_panel_record_read,
     VIEW3D_PT_custom_panel_saved_memo,
@@ -1019,5 +1166,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.154
+# Version Footer: 1.158
 # -------------------------------

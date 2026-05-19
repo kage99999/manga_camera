@@ -2,11 +2,9 @@
 # ファイル名：lattice_manager.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション
-# 変更点（1.154）:
-# - 登録OBJ一覧のチェックボックス表示を廃止
-# - 登録OBJ名の通常クリックで単独選択、Shift+クリックで複数選択に対応
-# - 3Dビュー上で選択中の登録OBJを「登録削除」「削除取消」の操作対象に変更
-# - 選択中の削除候補だけを取り消す「削除取消」処理を追加
+# 変更点（1.158）:
+# - ラティス管理セクションの「選択中OBJ」表記を「ラティス対象OBJ」に変更
+# - ラティス管理セクションの「登録OBJ」表記を「ラティス登録OBJ」に変更
 
 import bpy
 import uuid
@@ -141,7 +139,7 @@ def _registered_name_set(lattice_set):
 
 
 def _is_delete_candidate_item(item):
-    """登録OBJ項目が削除候補になっているか返す。"""
+    """ラティス登録OBJ項目が削除候補になっているか返す。"""
     try:
         return bool(getattr(item, "delete_candidate", False))
     except Exception:
@@ -164,7 +162,7 @@ def _clear_delete_candidates(lattice_set):
 
 
 def _clear_registered_object_checks(lattice_set):
-    """登録OBJ一覧の一時チェックを解除する。"""
+    """ラティス登録OBJ一覧の一時チェックを解除する。"""
     if lattice_set is None:
         return 0
     cleared = 0
@@ -187,7 +185,7 @@ def _clear_all_delete_candidates(scene):
 
 
 def _iter_registered_object_items(lattice_set, include_delete_candidates=True):
-    """登録OBJ項目を削除候補の扱い付きで返す。"""
+    """ラティス登録OBJ項目を削除候補の扱い付きで返す。"""
     if lattice_set is None:
         return []
     result = []
@@ -319,7 +317,7 @@ def _cleanup_duplicate_managed_lattice_modifiers(obj, lattice_set, keep_modifier
 
 
 def _iter_registered_existing_objects(lattice_set, include_delete_candidates=False):
-    """登録OBJのうち現在存在するOBJだけを返す。未確定の削除候補は標準では除外する。"""
+    """ラティス登録OBJのうち現在存在するOBJだけを返す。未確定の削除候補は標準では除外する。"""
     for name in _iter_registered_object_names(lattice_set, include_delete_candidates=include_delete_candidates):
         obj = bpy.data.objects.get(name)
         if obj is not None:
@@ -327,7 +325,7 @@ def _iter_registered_existing_objects(lattice_set, include_delete_candidates=Fal
 
 
 def _count_managed_modifiers(lattice_set):
-    """登録OBJのうち管理MODが付いている数を数える。"""
+    """ラティス登録OBJのうち管理MODが付いている数を数える。"""
     count = 0
     for obj in _iter_registered_existing_objects(lattice_set):
         if _find_managed_lattice_modifier(obj, lattice_set) is not None:
@@ -336,7 +334,7 @@ def _count_managed_modifiers(lattice_set):
 
 
 def _valid_registered_object_count(lattice_set):
-    """登録OBJのうち現在存在する数を数える。"""
+    """ラティス登録OBJのうち現在存在する数を数える。"""
     return sum(1 for _obj in _iter_registered_existing_objects(lattice_set))
 
 
@@ -353,7 +351,7 @@ def _world_bbox_corners_for_object(obj):
 
 
 def _registered_objects_world_bbox(lattice_set):
-    """登録OBJ群全体のワールド座標バウンディングBOXを返す。"""
+    """ラティス登録OBJ群全体のワールド座標バウンディングBOXを返す。"""
     try:
         import mathutils
     except Exception:
@@ -389,7 +387,7 @@ def _local_bbox_size_for_object_data(obj):
 
 
 def _fit_lattice_object_to_registered_objects(lattice_set, margin=1.05):
-    """指定ラティスOBJを登録OBJ群全体の大きさへ合わせる。"""
+    """指定ラティスOBJをラティス登録OBJ群全体の大きさへ合わせる。"""
     try:
         import mathutils
     except Exception:
@@ -401,7 +399,7 @@ def _fit_lattice_object_to_registered_objects(lattice_set, margin=1.05):
         return False, "ラティスOBJが未指定です"
     bbox = _registered_objects_world_bbox(lattice_set)
     if bbox is None:
-        return False, "合わせる登録OBJがありません"
+        return False, "合わせるラティス登録OBJがありません"
     min_v, max_v = bbox
     center = (min_v + max_v) * 0.5
     world_corners = [
@@ -443,7 +441,7 @@ def _fit_lattice_object_to_registered_objects(lattice_set, margin=1.05):
             bpy.context.view_layer.update()
     except Exception:
         pass
-    return True, "ラティスを登録OBJに合わせました"
+    return True, "ラティスをラティス登録OBJに合わせました"
 
 
 def _set_modifier_lattice_object(modifier, lattice_obj):
@@ -649,7 +647,7 @@ class MPM_LatticeSetItem(bpy.types.PropertyGroup):
     set_name: bpy.props.StringProperty(name="登録名", default="登録セット", update=_on_set_name_update)
     lattice_obj: bpy.props.PointerProperty(name="ラティス", type=bpy.types.Object, poll=_poll_lattice_object, update=_on_lattice_object_update)
     objects: bpy.props.CollectionProperty(type=MPM_LatticeRegisteredObjectItem)
-    object_index: bpy.props.IntProperty(name="登録OBJ選択", default=0, options={'SKIP_SAVE'})
+    object_index: bpy.props.IntProperty(name="ラティス登録OBJ選択", default=0, options={'SKIP_SAVE'})
 
 
 class MPM_UL_lattice_selected_object_list(bpy.types.UIList):
@@ -706,8 +704,8 @@ class MPM_UL_lattice_registered_object_list(bpy.types.UIList):
 # =========================
 class MPM_OT_lattice_select_registered_object(bpy.types.Operator):
     bl_idname = "camera.lattice_select_registered_object"
-    bl_label = "登録OBJを選択"
-    bl_description = "登録OBJ一覧でクリックしたOBJを3Dビュー上で選択します。Shift+クリックで複数選択します"
+    bl_label = "ラティス登録OBJを選択"
+    bl_description = "ラティス登録OBJ一覧でクリックしたOBJを3Dビュー上で選択します。Shift+クリックで複数選択します"
 
     object_name: bpy.props.StringProperty(default="")
     object_index: bpy.props.IntProperty(default=-1)
@@ -834,7 +832,7 @@ class MPM_OT_lattice_delete_set(bpy.types.Operator):
 
 class MPM_OT_lattice_register_selected_objects(bpy.types.Operator):
     bl_idname = "camera.lattice_register_selected_objects"
-    bl_label = "登録OBJに追加"
+    bl_label = "ラティス登録OBJに追加"
     bl_description = "3Dビューで選択中のOBJを現在のセットへ追加します"
 
     def execute(self, context):
@@ -870,19 +868,19 @@ class MPM_OT_lattice_register_selected_objects(bpy.types.Operator):
             self.report({'WARNING'}, f"登録できる選択OBJがありません / 除外: {skipped}")
             return {'CANCELLED'}
         lattice_set.object_index = max(0, len(lattice_set.objects) - 1)
-        self.report({'INFO'}, f"登録OBJに追加しました: {added}")
+        self.report({'INFO'}, f"ラティス登録OBJに追加しました: {added}")
         return {'FINISHED'}
 
 
 class MPM_OT_lattice_remove_selected_objects(bpy.types.Operator):
     bl_idname = "camera.lattice_remove_selected_objects"
     bl_label = "登録削除"
-    bl_description = "3Dビュー上で選択中の登録OBJを削除候補にします"
+    bl_description = "3Dビュー上で選択中のラティス登録OBJを削除候補にします"
 
     def execute(self, context):
         lattice_set = _get_active_lattice_set(context.scene)
         if lattice_set is None or len(lattice_set.objects) == 0:
-            self.report({'WARNING'}, "削除候補にする登録OBJがありません")
+            self.report({'WARNING'}, "削除候補にするラティス登録OBJがありません")
             return {'CANCELLED'}
         selected_names = {str(obj.name) for obj in getattr(context, "selected_objects", []) or [] if obj is not None}
         if not selected_names:
@@ -898,7 +896,7 @@ class MPM_OT_lattice_remove_selected_objects(bpy.types.Operator):
                 except Exception:
                     pass
         if marked == 0:
-            self.report({'WARNING'}, "削除候補にできる選択中OBJがありません")
+            self.report({'WARNING'}, "削除候補にできるラティス対象OBJがありません")
             return {'CANCELLED'}
         self.report({'INFO'}, f"削除候補にしました: {marked} / 追加・更新で確定")
         return {'FINISHED'}
@@ -912,7 +910,7 @@ class MPM_OT_lattice_cancel_remove_selected_objects(bpy.types.Operator):
     def execute(self, context):
         lattice_set = _get_active_lattice_set(context.scene)
         if lattice_set is None or len(lattice_set.objects) == 0:
-            self.report({'WARNING'}, "削除取消できる登録OBJがありません")
+            self.report({'WARNING'}, "削除取消できるラティス登録OBJがありません")
             return {'CANCELLED'}
         selected_names = {str(obj.name) for obj in getattr(context, "selected_objects", []) or [] if obj is not None}
         if not selected_names:
@@ -936,8 +934,8 @@ class MPM_OT_lattice_cancel_remove_selected_objects(bpy.types.Operator):
 
 class MPM_OT_lattice_fit_to_registered_objects(bpy.types.Operator):
     bl_idname = "camera.lattice_fit_to_registered_objects"
-    bl_label = "ラティスを登録OBJに合わせる"
-    bl_description = "現在セットのラティスOBJを登録OBJ群のバウンディングBOXに合わせます"
+    bl_label = "ラティスをラティス登録OBJに合わせる"
+    bl_description = "現在セットのラティスOBJをラティス登録OBJ群のバウンディングBOXに合わせます"
 
     def execute(self, context):
         lattice_set = _get_active_lattice_set(context.scene)
@@ -999,7 +997,7 @@ def _finalize_lattice_delete_candidates(lattice_set):
 class MPM_OT_lattice_apply_or_update_modifiers(bpy.types.Operator):
     bl_idname = "camera.lattice_apply_or_update_modifiers"
     bl_label = "追加 / 更新"
-    bl_description = "登録OBJへ指定ラティスのラティス管理用モディファイアを追加または更新します"
+    bl_description = "ラティス登録OBJへ指定ラティスのラティス管理用モディファイアを追加または更新します"
 
     def execute(self, context):
         lattice_set = _get_active_lattice_set(context.scene)
@@ -1018,7 +1016,7 @@ class MPM_OT_lattice_apply_or_update_modifiers(bpy.types.Operator):
             if removed_items > 0:
                 self.report({'INFO'}, f"削除候補を確定しました / 登録削除:{removed_items} MOD削除:{removed_mods}")
                 return {'FINISHED'}
-            self.report({'WARNING'}, "登録OBJがありません")
+            self.report({'WARNING'}, "ラティス登録OBJがありません")
             return {'CANCELLED'}
         _ensure_set_uid(lattice_set)
         _ensure_object_mode(context)
@@ -1130,7 +1128,7 @@ def _set_managed_modifiers_enabled(lattice_set, enabled):
 
 
 def _delete_managed_modifiers_for_set(lattice_set):
-    """現在セットの管理MODだけを登録OBJから削除する。別セットのMODは残す。"""
+    """現在セットの管理MODだけをラティス登録OBJから削除する。別セットのMODは残す。"""
     if lattice_set is None:
         return 0
     count = 0
@@ -1229,7 +1227,7 @@ def _draw_lattice_set_header(layout, context, lattice_set):
 
 def _draw_selected_objects_panel(layout, context, lattice_set):
     """3Dビューで選択中のOBJ一覧と登録ボタンを描く。"""
-    body = _draw_subpanel(layout, "mpm_lattice_selected_objects_panel", "選択中OBJ")
+    body = _draw_subpanel(layout, "mpm_lattice_selected_objects_panel", "ラティス対象OBJ")
     if body is None:
         return
     count = _sync_lattice_selected_object_display_items(context)
@@ -1245,15 +1243,15 @@ def _draw_selected_objects_panel(layout, context, lattice_set):
     else:
         empty = body.box()
         empty.enabled = False
-        empty.label(text="選択中OBJはありません")
+        empty.label(text="ラティス対象OBJはありません")
 
     add_row = body.row(align=True)
     add_row.enabled = lattice_set is not None and count > 0
-    add_row.operator("camera.lattice_register_selected_objects", text="登録OBJに追加")
+    add_row.operator("camera.lattice_register_selected_objects", text="ラティス登録OBJに追加")
 
 def _draw_registered_objects_panel(layout, context, lattice_set):
-    """登録OBJの一覧と削除ボタンを描く。"""
-    body = _draw_subpanel(layout, "mpm_lattice_registered_objects_panel", "登録OBJ")
+    """ラティス登録OBJの一覧と削除ボタンを描く。"""
+    body = _draw_subpanel(layout, "mpm_lattice_registered_objects_panel", "ラティス登録OBJ")
     if body is None:
         return
     count = len(lattice_set.objects) if lattice_set is not None else 0
@@ -1280,7 +1278,7 @@ def _draw_registered_objects_panel(layout, context, lattice_set):
     else:
         empty = body.box()
         empty.enabled = False
-        empty.label(text="登録OBJはありません")
+        empty.label(text="ラティス登録OBJはありません")
 
     remove_row = body.row(align=True)
     remove_row.enabled = lattice_set is not None and count > 0
@@ -1310,7 +1308,7 @@ def _draw_modifier_management_panel(layout, context, lattice_set):
 
     fit_row = body.row(align=True)
     fit_row.enabled = ready
-    fit_row.operator("camera.lattice_fit_to_registered_objects", text="ラティスを登録OBJに合わせる")
+    fit_row.operator("camera.lattice_fit_to_registered_objects", text="ラティスをラティス登録OBJに合わせる")
 
     apply_row = body.row(align=True)
     apply_row.scale_y = 1.2
@@ -1335,7 +1333,7 @@ def _draw_status_panel(layout, context, lattice_set):
     if lattice_set is None:
         disabled = body.column(align=True)
         disabled.enabled = False
-        disabled.label(text="登録OBJ：0")
+        disabled.label(text="ラティス登録OBJ：0")
         disabled.label(text="モディファイアあり：0 / 0")
         disabled.label(text="ラティス：未指定")
         return
@@ -1345,7 +1343,7 @@ def _draw_status_panel(layout, context, lattice_set):
     managed_total = _count_managed_modifiers(lattice_set)
     lattice_obj = getattr(lattice_set, "lattice_obj", None)
 
-    body.label(text=f"登録OBJ：{registered_total}")
+    body.label(text=f"ラティス登録OBJ：{registered_total}")
     if registered_total != valid_total:
         warn = body.row(align=True)
         warn.alert = True
@@ -1466,5 +1464,5 @@ def unregister_lattice_manager():
 
 # -------------------------------
 # ファイル名：lattice_manager.py
-# Version Footer: 1.154
+# Version Footer: 1.158
 # -------------------------------
