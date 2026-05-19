@@ -2,9 +2,9 @@
 # ファイル名：lattice_manager.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション
-# 変更点（1.158）:
-# - ラティス管理セクションの「選択中OBJ」表記を「ラティス対象OBJ」に変更
-# - ラティス管理セクションの「登録OBJ」表記を「ラティス登録OBJ」に変更
+# 変更点（1.164）:
+# - ラティス管理OFF時にセクション内をグレーアウト
+# - ラティス管理OFF時に登録ラティスOBJを非表示化し、ON時に元の表示状態へ復元
 
 import bpy
 import uuid
@@ -18,6 +18,12 @@ LATTICE_MODIFIER_NAME = "ラティス_アドオンセット"
 LATTICE_LEGACY_MODIFIER_PREFIX = "MC_Lattice_"
 LATTICE_SET_ENUM_CACHE = []
 LATTICE_SET_ENUM_STRING_POOL = {}
+LATTICE_GLOBAL_FORCED_KEY = "mpm_lattice_global_forced_disabled"
+LATTICE_GLOBAL_PREV_VIEWPORT_KEY = "mpm_lattice_prev_show_viewport"
+LATTICE_GLOBAL_PREV_RENDER_KEY = "mpm_lattice_prev_show_render"
+LATTICE_OBJECT_FORCED_HIDE_KEY = "mpm_lattice_object_forced_hidden"
+LATTICE_OBJECT_PREV_HIDE_VIEWPORT_KEY = "mpm_lattice_object_prev_hide_viewport"
+LATTICE_OBJECT_PREV_HIDE_RENDER_KEY = "mpm_lattice_object_prev_hide_render"
 
 
 # =========================
@@ -231,10 +237,337 @@ def _modifier_custom_set(modifier, key, value):
         return False
 
 
+def _modifier_custom_delete(modifier, key):
+    """Modifierのカスタムプロパティを安全に削除する。"""
+    try:
+        if key in modifier.keys():
+            del modifier[key]
+        return True
+    except Exception:
+        return False
+
+
+def _modifier_unique_key(modifier):
+    """同一Modifier判定用に、Python wrapper id ではなく所有OBJ名+MOD名を使う。"""
+    try:
+        owner = getattr(modifier, "id_data", None)
+        owner_name = str(getattr(owner, "name_full", "") or getattr(owner, "name", "") or "")
+        mod_name = str(getattr(modifier, "name", "") or "")
+        if owner_name or mod_name:
+            return (owner_name, mod_name)
+    except Exception:
+        pass
+    return ("__id__", id(modifier))
+
+
+def _tag_modifier_owner_for_update(modifier):
+    """MODのON/OFF変更後に所有OBJを更新対象としてマークする。"""
+    try:
+        owner = getattr(modifier, "id_data", None)
+        if owner is not None:
+            try:
+                owner.update_tag(refresh={'OBJECT', 'DATA'})
+            except TypeError:
+                owner.update_tag()
+            except Exception:
+                pass
+            data = getattr(owner, "data", None)
+            if data is not None:
+                try:
+                    data.update_tag()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _lattice_manager_scene_relation_sets(scene):
+    """管理セットから、登録OBJ名とラティスOBJ名を集める。"""
+    registered_names = set()
+    lattice_names = set()
+    sets = _get_lattice_sets(scene) if scene is not None else None
+    if sets is None:
+        return registered_names, lattice_names
+    for lattice_set in sets:
+        for name in _iter_registered_object_names(lattice_set, include_delete_candidates=True):
+            if name:
+                registered_names.add(str(name))
+        lattice_obj = getattr(lattice_set, "lattice_obj", None)
+        lattice_name = str(getattr(lattice_obj, "name", "") or "") if lattice_obj is not None else ""
+        if lattice_name:
+            lattice_names.add(lattice_name)
+    return registered_names, lattice_names
+
+
+def _modifier_links_to_lattice_manager_sets(modifier, scene):
+    """名前やタグが無い旧MODでも、登録OBJ+指定ラティスの組み合わせなら管理対象候補にする。"""
+    if scene is None or getattr(modifier, "type", "") != 'LATTICE':
+        return False
+    try:
+        owner = getattr(modifier, "id_data", None)
+        owner_name = str(getattr(owner, "name", "") or "")
+        lattice_obj = getattr(modifier, "object", None)
+        lattice_name = str(getattr(lattice_obj, "name", "") or "") if lattice_obj is not None else ""
+    except Exception:
+        return False
+    if not owner_name or not lattice_name:
+        return False
+    registered_names, lattice_names = _lattice_manager_scene_relation_sets(scene)
+    return owner_name in registered_names and lattice_name in lattice_names
+
+
+def _iter_all_lattice_manager_modifiers(scene=None):
+    """全オブジェクトから、このアドオン由来のラティスMODを列挙する。"""
+    yielded = set()
+    if scene is None:
+        try:
+            scene = bpy.context.scene
+        except Exception:
+            scene = None
+    sets = _get_lattice_sets(scene) if scene is not None else None
+    if sets is not None:
+        for lattice_set in sets:
+            for obj in _iter_registered_existing_objects(lattice_set, include_delete_candidates=True):
+                if not _is_modifier_area_supported(obj):
+                    continue
+                for mod in list(getattr(obj, "modifiers", []) or []):
+                    is_current_set_mod = _is_managed_lattice_modifier_for_set(mod, lattice_set)
+                    is_linked_legacy_mod = _modifier_links_to_lattice_manager_sets(mod, scene)
+                    is_named_or_tagged_mod = _is_lattice_manager_candidate_modifier(mod, scene)
+                    if not (is_current_set_mod or is_linked_legacy_mod or is_named_or_tagged_mod):
+                        continue
+                    key = _modifier_unique_key(mod)
+                    if key in yielded:
+                        continue
+                    yielded.add(key)
+                    yield mod
+    for obj in getattr(bpy.data, "objects", []) or []:
+        if not _is_modifier_area_supported(obj):
+            continue
+        for mod in list(getattr(obj, "modifiers", []) or []):
+            if not _is_lattice_manager_candidate_modifier(mod, scene):
+                continue
+            key = _modifier_unique_key(mod)
+            if key in yielded:
+                continue
+            yielded.add(key)
+            yield mod
+
+
+def _force_disable_modifier_preserve(modifier):
+    """全体OFF用に、現在の有効状態を保存してからMODを無効化する。"""
+    if modifier is None:
+        return False
+    try:
+        forced = bool(_modifier_custom_get(modifier, LATTICE_GLOBAL_FORCED_KEY, False))
+        if not forced:
+            _modifier_custom_set(modifier, LATTICE_GLOBAL_PREV_VIEWPORT_KEY, bool(getattr(modifier, "show_viewport", True)))
+            _modifier_custom_set(modifier, LATTICE_GLOBAL_PREV_RENDER_KEY, bool(getattr(modifier, "show_render", True)))
+            _modifier_custom_set(modifier, LATTICE_GLOBAL_FORCED_KEY, True)
+        modifier.show_viewport = False
+        modifier.show_render = False
+        _tag_modifier_owner_for_update(modifier)
+        return True
+    except Exception:
+        return False
+
+
+def _restore_modifier_from_global_disable(modifier):
+    """全体ON時に、全体OFFで無効化した管理MODを確実に有効化する。"""
+    if modifier is None:
+        return False
+    try:
+        # 以前はOFF前の状態へ復元していたが、UI上の「ラティス管理有効」は親スイッチなので、
+        # ONへ戻した時点で管理ラティスMODを有効状態にそろえる。
+        _modifier_custom_delete(modifier, LATTICE_GLOBAL_FORCED_KEY)
+        _modifier_custom_delete(modifier, LATTICE_GLOBAL_PREV_VIEWPORT_KEY)
+        _modifier_custom_delete(modifier, LATTICE_GLOBAL_PREV_RENDER_KEY)
+        modifier.show_viewport = True
+        modifier.show_render = True
+        _tag_modifier_owner_for_update(modifier)
+        return True
+    except Exception:
+        return False
+
+
+
+def _iter_registered_lattice_objects(scene=None):
+    """全登録セットで指定されているラティスOBJを重複なしで列挙する。"""
+    yielded = set()
+    if scene is None:
+        try:
+            scene = bpy.context.scene
+        except Exception:
+            scene = None
+    sets = _get_lattice_sets(scene) if scene is not None else None
+    if sets is None:
+        return
+    for lattice_set in sets:
+        lattice_obj = getattr(lattice_set, "lattice_obj", None)
+        if lattice_obj is None or getattr(lattice_obj, "type", "") != 'LATTICE':
+            continue
+        name = str(getattr(lattice_obj, "name", "") or "")
+        if not name or name in yielded:
+            continue
+        yielded.add(name)
+        yield lattice_obj
+
+
+def _object_custom_get(obj, key, default=None):
+    """Objectのカスタムプロパティを安全に読む。"""
+    try:
+        return obj.get(key, default)
+    except Exception:
+        try:
+            return obj[key]
+        except Exception:
+            return default
+
+
+def _object_custom_set(obj, key, value):
+    """Objectのカスタムプロパティを安全に書く。"""
+    try:
+        obj[key] = value
+        return True
+    except Exception:
+        return False
+
+
+def _object_custom_delete(obj, key):
+    """Objectのカスタムプロパティを安全に削除する。"""
+    try:
+        if key in obj.keys():
+            del obj[key]
+        return True
+    except Exception:
+        return False
+
+
+def _force_hide_lattice_object_preserve(lattice_obj):
+    """全体OFF用に、登録ラティスOBJの表示状態を保存してから非表示にする。"""
+    if lattice_obj is None:
+        return False
+    try:
+        forced = bool(_object_custom_get(lattice_obj, LATTICE_OBJECT_FORCED_HIDE_KEY, False))
+        if not forced:
+            _object_custom_set(lattice_obj, LATTICE_OBJECT_PREV_HIDE_VIEWPORT_KEY, bool(getattr(lattice_obj, "hide_viewport", False)))
+            _object_custom_set(lattice_obj, LATTICE_OBJECT_PREV_HIDE_RENDER_KEY, bool(getattr(lattice_obj, "hide_render", False)))
+            _object_custom_set(lattice_obj, LATTICE_OBJECT_FORCED_HIDE_KEY, True)
+        lattice_obj.hide_viewport = True
+        try:
+            lattice_obj.hide_render = True
+        except Exception:
+            pass
+        try:
+            lattice_obj.update_tag(refresh={'OBJECT'})
+        except TypeError:
+            lattice_obj.update_tag()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _restore_lattice_object_from_global_hide(lattice_obj):
+    """全体ON時に、OFF前の登録ラティスOBJ表示状態へ戻す。"""
+    if lattice_obj is None:
+        return False
+    try:
+        forced = bool(_object_custom_get(lattice_obj, LATTICE_OBJECT_FORCED_HIDE_KEY, False))
+        prev_viewport = bool(_object_custom_get(lattice_obj, LATTICE_OBJECT_PREV_HIDE_VIEWPORT_KEY, False))
+        prev_render = bool(_object_custom_get(lattice_obj, LATTICE_OBJECT_PREV_HIDE_RENDER_KEY, False))
+        if forced:
+            lattice_obj.hide_viewport = prev_viewport
+            try:
+                lattice_obj.hide_render = prev_render
+            except Exception:
+                pass
+        _object_custom_delete(lattice_obj, LATTICE_OBJECT_FORCED_HIDE_KEY)
+        _object_custom_delete(lattice_obj, LATTICE_OBJECT_PREV_HIDE_VIEWPORT_KEY)
+        _object_custom_delete(lattice_obj, LATTICE_OBJECT_PREV_HIDE_RENDER_KEY)
+        try:
+            lattice_obj.update_tag(refresh={'OBJECT'})
+        except TypeError:
+            lattice_obj.update_tag()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _apply_registered_lattice_object_visibility(scene, enabled):
+    """ラティス管理全体ON/OFFに合わせて登録ラティスOBJの表示状態を切り替える。"""
+    changed = 0
+    for lattice_obj in _iter_registered_lattice_objects(scene):
+        if enabled:
+            if _restore_lattice_object_from_global_hide(lattice_obj):
+                changed += 1
+        else:
+            if _force_hide_lattice_object_preserve(lattice_obj):
+                changed += 1
+    return changed
+
+def apply_lattice_management_enabled(scene, enabled):
+    """ラティス管理全体のON/OFFを、全管理MODと登録ラティスOBJへ反映する。"""
+    enabled = bool(enabled)
+    changed = 0
+    for mod in _iter_all_lattice_manager_modifiers(scene):
+        if enabled:
+            if _restore_modifier_from_global_disable(mod):
+                changed += 1
+        else:
+            if _force_disable_modifier_preserve(mod):
+                changed += 1
+    changed += _apply_registered_lattice_object_visibility(scene, enabled)
+    try:
+        if bpy.context is not None and bpy.context.view_layer is not None:
+            bpy.context.view_layer.update()
+    except Exception:
+        pass
+    return changed
+
+
+def _is_lattice_management_enabled(scene):
+    """ラティス管理全体スイッチの現在値を返す。"""
+    if scene is None or not hasattr(scene, "mpm_lattice_management_enabled"):
+        return True
+    try:
+        return bool(getattr(scene, "mpm_lattice_management_enabled", True))
+    except Exception:
+        return True
+
+
+def _on_lattice_management_enabled_update(self, context):
+    """ラティス管理全体スイッチ変更時の反映処理。"""
+    try:
+        scene = context.scene if context is not None else self
+    except Exception:
+        scene = self
+    try:
+        apply_lattice_management_enabled(scene, bool(getattr(scene, "mpm_lattice_management_enabled", True)))
+    except Exception:
+        pass
+
+
+def _respect_global_lattice_management_state(scene, modifier):
+    """全体OFF中に新規作成・更新された管理MODも即OFFにそろえる。"""
+    if modifier is None:
+        return
+    if not _is_lattice_management_enabled(scene):
+        _force_disable_modifier_preserve(modifier)
+
+
 def _modifier_name_is_lattice_manager_style(modifier):
     """このアドオンが作った可能性が高いラティスMOD名か判定する。"""
     name = str(getattr(modifier, "name", "") or "")
-    return name == LATTICE_MODIFIER_NAME or name.startswith(LATTICE_MODIFIER_NAME + ".") or name.startswith(LATTICE_LEGACY_MODIFIER_PREFIX)
+    return (
+        name == LATTICE_MODIFIER_NAME
+        or name.startswith(LATTICE_MODIFIER_NAME + ".")
+        or name.startswith(LATTICE_MODIFIER_NAME + "_")
+        or name.startswith(LATTICE_LEGACY_MODIFIER_PREFIX)
+    )
 
 
 def _is_managed_lattice_modifier(modifier, set_uid):
@@ -266,14 +599,18 @@ def _is_managed_lattice_modifier_for_set(modifier, lattice_set):
     return False
 
 
-def _is_lattice_manager_candidate_modifier(modifier):
+def _is_lattice_manager_candidate_modifier(modifier, scene=None):
     """旧版を含め、このアドオン由来とみなせるラティスMODか判定する。"""
     if getattr(modifier, "type", "") != 'LATTICE':
         return False
     created_by = _modifier_custom_get(modifier, "created_by")
     if created_by == LATTICE_MANAGER_TAG:
         return True
-    return _modifier_name_is_lattice_manager_style(modifier)
+    if _modifier_name_is_lattice_manager_style(modifier):
+        return True
+    if _modifier_links_to_lattice_manager_sets(modifier, scene):
+        return True
+    return False
 
 
 def _tag_lattice_modifier_for_set(modifier, lattice_set):
@@ -1046,6 +1383,7 @@ class MPM_OT_lattice_apply_or_update_modifiers(bpy.types.Operator):
             duplicates_removed = _cleanup_duplicate_managed_lattice_modifiers(obj, lattice_set, mod)
             if not _set_modifier_lattice_object(mod, lattice_obj):
                 skipped += 1
+            _respect_global_lattice_management_state(context.scene, mod)
         self.report({'INFO'}, f"ラティスモディファイア処理 完了 / 登録削除:{removed_items} MOD削除:{removed_mods} 追加:{added} 更新:{updated} 除外:{skipped}")
         return {'FINISHED'}
 
@@ -1112,6 +1450,8 @@ def _set_managed_modifiers_enabled(lattice_set, enabled):
     if lattice_set is None:
         return 0
     count = 0
+    scene = getattr(bpy.context, "scene", None)
+    global_enabled = _is_lattice_management_enabled(scene)
     for obj in _iter_registered_existing_objects(lattice_set):
         mod = _find_managed_lattice_modifier(obj, lattice_set)
         if mod is None:
@@ -1119,8 +1459,18 @@ def _set_managed_modifiers_enabled(lattice_set, enabled):
         _tag_lattice_modifier_for_set(mod, lattice_set)
         _cleanup_duplicate_managed_lattice_modifiers(obj, lattice_set, mod)
         try:
-            mod.show_viewport = bool(enabled)
-            mod.show_render = bool(enabled)
+            if global_enabled:
+                _modifier_custom_delete(mod, LATTICE_GLOBAL_FORCED_KEY)
+                _modifier_custom_delete(mod, LATTICE_GLOBAL_PREV_VIEWPORT_KEY)
+                _modifier_custom_delete(mod, LATTICE_GLOBAL_PREV_RENDER_KEY)
+                mod.show_viewport = bool(enabled)
+                mod.show_render = bool(enabled)
+            else:
+                _modifier_custom_set(mod, LATTICE_GLOBAL_PREV_VIEWPORT_KEY, bool(enabled))
+                _modifier_custom_set(mod, LATTICE_GLOBAL_PREV_RENDER_KEY, bool(enabled))
+                _modifier_custom_set(mod, LATTICE_GLOBAL_FORCED_KEY, True)
+                mod.show_viewport = False
+                mod.show_render = False
             count += 1
         except Exception:
             pass
@@ -1369,15 +1719,24 @@ class VIEW3D_PT_manga_camera_lattice_manager(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
+        layout.prop(scene, "mpm_lattice_management_enabled", text="ラティス管理有効")
+        management_enabled = bool(getattr(scene, "mpm_lattice_management_enabled", True))
+        try:
+            if not management_enabled:
+                apply_lattice_management_enabled(scene, False)
+        except Exception:
+            pass
         _ensure_active_lattice_index(scene)
         lattice_set = _get_active_lattice_set(scene)
-        _draw_lattice_set_header(layout, context, lattice_set)
+        body = layout.column(align=True)
+        body.enabled = management_enabled
+        _draw_lattice_set_header(body, context, lattice_set)
         if lattice_set is None:
             return
-        _draw_selected_objects_panel(layout, context, lattice_set)
-        _draw_registered_objects_panel(layout, context, lattice_set)
-        _draw_modifier_management_panel(layout, context, lattice_set)
-        _draw_status_panel(layout, context, lattice_set)
+        _draw_selected_objects_panel(body, context, lattice_set)
+        _draw_registered_objects_panel(body, context, lattice_set)
+        _draw_modifier_management_panel(body, context, lattice_set)
+        _draw_status_panel(body, context, lattice_set)
 
 
 # =========================
@@ -1411,6 +1770,7 @@ def register_lattice_manager():
         "mpm_lattice_sets",
         "mpm_lattice_active_set_index",
         "mpm_lattice_active_set_enum",
+        "mpm_lattice_management_enabled",
     ):
         if hasattr(bpy.types.Scene, attr):
             try:
@@ -1431,15 +1791,26 @@ def register_lattice_manager():
     bpy.types.Scene.mpm_lattice_sets = bpy.props.CollectionProperty(type=MPM_LatticeSetItem)
     bpy.types.Scene.mpm_lattice_active_set_index = bpy.props.IntProperty(default=-1, options={'SKIP_SAVE'})
     bpy.types.Scene.mpm_lattice_active_set_enum = bpy.props.EnumProperty(items=_lattice_set_enum_items, update=_on_lattice_set_enum_update)
+    bpy.types.Scene.mpm_lattice_management_enabled = bpy.props.BoolProperty(
+        name="ラティス管理有効",
+        description="OFF のとき、このアドオンが管理しているラティスモディファイアをすべて無効にします",
+        default=True,
+        update=_on_lattice_management_enabled_update,
+    )
     bpy.types.WindowManager.mpm_lattice_selected_display_items = bpy.props.CollectionProperty(type=MPM_LatticeSelectedObjectDisplayItem)
     bpy.types.WindowManager.mpm_lattice_selected_display_index = bpy.props.IntProperty(default=0, options={'SKIP_SAVE'})
 
 def unregister_lattice_manager():
     """ラティス管理セクションを解除する。"""
+    try:
+        apply_lattice_management_enabled(None, True)
+    except Exception:
+        pass
     for attr in (
         "mpm_lattice_sets",
         "mpm_lattice_active_set_index",
         "mpm_lattice_active_set_enum",
+        "mpm_lattice_management_enabled",
     ):
         if hasattr(bpy.types.Scene, attr):
             try:
@@ -1464,5 +1835,5 @@ def unregister_lattice_manager():
 
 # -------------------------------
 # ファイル名：lattice_manager.py
-# Version Footer: 1.158
+# Version Footer: 1.164
 # -------------------------------

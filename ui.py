@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.158）:
-# - ラティス管理セクションの見間違い防止用に「選択中OBJ」「登録OBJ」表記を変更
+# 変更点（1.164）:
+# - 追加データ記録の「ラティスをON」チェックを削除
+# - 付随データのラティス表示は維持
 
 import bpy
 
@@ -340,16 +341,26 @@ def _saved_data_has_memo(data):
     return bool(memo)
 
 
+def _saved_data_has_lattice_enabled(data):
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get('lattice_enabled', False))
+
+
 def _draw_saved_data_status_labels(layout, current_data):
     has_obj = _saved_data_has_recorded_objects(current_data)
     has_memo = _saved_data_has_memo(current_data)
+    has_lattice = _saved_data_has_lattice_enabled(current_data)
+
+    prefix_row = layout.row(align=True)
+    prefix_row.alignment = 'LEFT'
+    prefix_row.label(text="付随データ：")
+
     row = layout.row(align=True)
     row.alignment = 'LEFT'
-
-    prefix_row = row.row(align=True)
-    prefix_row.alignment = 'LEFT'
-    prefix_row.ui_units_x = 4.2
-    prefix_row.label(text="付随データ：")
+    indent = row.row(align=True)
+    indent.ui_units_x = 1.2
+    indent.label(text="")
 
     obj_row = row.row(align=True)
     obj_row.alignment = 'LEFT'
@@ -367,6 +378,17 @@ def _draw_saved_data_status_labels(layout, current_data):
     memo_row.ui_units_x = 4.5
     memo_row.enabled = has_memo
     memo_row.label(text="[摘要有]" if has_memo else "[摘要無]")
+
+    slash_row2 = row.row(align=True)
+    slash_row2.alignment = 'LEFT'
+    slash_row2.ui_units_x = 0.6
+    slash_row2.label(text="/")
+
+    lattice_row = row.row(align=True)
+    lattice_row.alignment = 'LEFT'
+    lattice_row.ui_units_x = 4.8
+    lattice_row.enabled = has_lattice
+    lattice_row.label(text="[ラティス有]" if has_lattice else "[ラティス無]")
 
 
 def _draw_saved_memo_controls(layout, context):
@@ -1166,5 +1188,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.158
+# Version Footer: 1.164
 # -------------------------------

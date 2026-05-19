@@ -126,6 +126,7 @@ def _stock_signature(item: dict) -> tuple:
         item.get("frame_current"),
         bool(item.get("record_selected_objects", False)),
         tuple(selected_objects),
+        bool(item.get("lattice_enabled", False)),
     )
 
 
@@ -165,6 +166,7 @@ def _normalize_saved_item(item) -> dict:
         'memo': str(item.get('memo', '') or ''),
         'record_selected_objects': bool(item.get('record_selected_objects', False)),
         'selected_objects': [],
+        'lattice_enabled': bool(item.get('lattice_enabled', False)),
     }
     selected_objects = item.get('selected_objects', [])
     if isinstance(selected_objects, list):

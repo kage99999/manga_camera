@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.158）:
-# - ラティス管理セクションの見間違い防止用に「選択中OBJ」「登録OBJ」表記を変更
+# 変更点（1.164）:
+# - 追加データ記録の「ラティスをON」チェックを削除
+# - ラティス状態は「ラティス管理有効」の現在状態を自動記録
 
 import bpy
 import os
@@ -49,7 +50,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 158)  # 1.158
+    v = (1, 0, 164)  # 1.164
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -252,6 +253,10 @@ def _apply_saved_camera_data(scene, camera, manager, data) -> None:
         _apply_saved_selected_object_data(data if isinstance(data, dict) else {})
     except Exception as e:
         print(f"選択OBJデータの適用中にエラーが発生しました: {e}")
+    try:
+        _apply_saved_lattice_state(scene, data if isinstance(data, dict) else {})
+    except Exception as e:
+        print(f"ラティス状態の適用中にエラーが発生しました: {e}")
 
 
 def _apply_saved_selected_object_data(data) -> None:
@@ -283,6 +288,24 @@ def _apply_saved_selected_object_data(data) -> None:
             obj.scale = obj_data.get('scale', list(obj.scale))
         except Exception:
             pass
+
+
+def _apply_saved_lattice_state(scene, data) -> None:
+    """ストックに保存されたラティスON/OFF状態をラティス管理全体へ反映する。"""
+    if scene is None or not isinstance(data, dict):
+        return
+    enabled = bool(data.get('lattice_enabled', False))
+    try:
+        if hasattr(scene, 'mpm_lattice_management_enabled'):
+            scene.mpm_lattice_management_enabled = enabled
+            return
+    except Exception:
+        pass
+    try:
+        from . import lattice_manager
+        lattice_manager.apply_lattice_management_enabled(scene, enabled)
+    except Exception:
+        pass
 
 # ---------------- OS操作 ----------------
 def _open_system_folder(path: str):
@@ -580,6 +603,16 @@ class OBJECT_OT_recall_camera_position(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def _get_current_lattice_management_enabled(scene) -> bool:
+    """現在のラティス管理全体ON/OFF状態を保存用に取得する。"""
+    if scene is None:
+        return False
+    try:
+        return bool(getattr(scene, 'mpm_lattice_management_enabled', False))
+    except Exception:
+        return False
+
+
 def _build_current_camera_saved_item(scene, camera) -> dict:
     bg_image = "No File"
     bg_opacity = 1.0
@@ -617,6 +650,7 @@ def _build_current_camera_saved_item(scene, camera) -> dict:
         'memo': str(getattr(scene, 'saved_memo_text', '') or ''),
         'record_selected_objects': bool(getattr(scene, 'record_selected_objects', False)),
         'selected_objects': selected_objects,
+        'lattice_enabled': _get_current_lattice_management_enabled(scene),
         'created_at': float(time.time()),
     }
 
@@ -2135,5 +2169,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.158
+# Version Footer: 1.164
 # -------------------------------
