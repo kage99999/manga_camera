@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.146）:
-# - 記録済みOBJデータ欄のクリック選択同期を追加
+# 変更点（1.154）:
+# - ラティス管理の登録OBJチェック削除候補化とクリック選択を追加
 
 import bpy
 import os
@@ -49,7 +49,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 146)  # 1.146
+    v = (1, 0, 154)  # 1.154
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -2072,5 +2072,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.146
+# Version Footer: 1.154
 # -------------------------------
