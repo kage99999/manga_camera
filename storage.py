@@ -99,6 +99,50 @@ def _resolve_bg_image_path(manager, filename: str) -> str:
     return os.path.join(dirpath, fname)
 
 
+def _lattice_state_signature(value) -> tuple:
+    """ラティス状態辞書を重複判定に使える安定したタプルへ変換する。"""
+    if not isinstance(value, dict):
+        return tuple()
+    set_states = []
+    for item in value.get("set_states", []) or []:
+        if not isinstance(item, dict):
+            continue
+        set_states.append((
+            str(item.get("set_uid", "") or ""),
+            str(item.get("set_name", "") or ""),
+            bool(item.get("modifiers_enabled", True)),
+        ))
+    return (
+        bool(value.get("lattice_enabled", False)),
+        bool(value.get("multi_set_enabled", False)),
+        str(value.get("active_set_uid", "") or ""),
+        str(value.get("active_set_name", "") or ""),
+        tuple(set_states),
+    )
+
+
+def _normalize_lattice_state(value, fallback_enabled=False) -> dict:
+    """保存用ラティス状態を安全な辞書へ正規化する。"""
+    if not isinstance(value, dict):
+        value = {}
+    out = {
+        "lattice_enabled": bool(value.get("lattice_enabled", fallback_enabled)),
+        "multi_set_enabled": bool(value.get("multi_set_enabled", False)),
+        "active_set_uid": str(value.get("active_set_uid", "") or ""),
+        "active_set_name": str(value.get("active_set_name", "") or ""),
+        "set_states": [],
+    }
+    for item in value.get("set_states", []) or []:
+        if not isinstance(item, dict):
+            continue
+        out["set_states"].append({
+            "set_uid": str(item.get("set_uid", "") or ""),
+            "set_name": str(item.get("set_name", "") or ""),
+            "modifiers_enabled": bool(item.get("modifiers_enabled", True)),
+        })
+    return out
+
+
 def _stock_signature(item: dict) -> tuple:
     if not isinstance(item, dict):
         return tuple()
@@ -127,6 +171,7 @@ def _stock_signature(item: dict) -> tuple:
         bool(item.get("record_selected_objects", False)),
         tuple(selected_objects),
         bool(item.get("lattice_enabled", False)),
+        _lattice_state_signature(item.get("lattice_state")),
     )
 
 
@@ -167,6 +212,7 @@ def _normalize_saved_item(item) -> dict:
         'record_selected_objects': bool(item.get('record_selected_objects', False)),
         'selected_objects': [],
         'lattice_enabled': bool(item.get('lattice_enabled', False)),
+        'lattice_state': _normalize_lattice_state(item.get('lattice_state'), bool(item.get('lattice_enabled', False))),
     }
     selected_objects = item.get('selected_objects', [])
     if isinstance(selected_objects, list):

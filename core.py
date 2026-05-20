@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.164）:
-# - 追加データ記録の「ラティスをON」チェックを削除
-# - ラティス状態は「ラティス管理有効」の現在状態を自動記録
+# 変更点（1.173）:
+# - 登録セット削除後の管理MOD番号リネームを補強
 
 import bpy
 import os
@@ -50,7 +49,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 164)  # 1.164
+    v = (1, 0, 173)  # 1.173
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -291,9 +290,17 @@ def _apply_saved_selected_object_data(data) -> None:
 
 
 def _apply_saved_lattice_state(scene, data) -> None:
-    """ストックに保存されたラティスON/OFF状態をラティス管理全体へ反映する。"""
+    """ストックに保存されたラティスON/OFF状態とセット運用状態をラティス管理へ反映する。"""
     if scene is None or not isinstance(data, dict):
         return
+    state = data.get('lattice_state')
+    try:
+        from . import lattice_manager
+        if isinstance(state, dict):
+            lattice_manager.apply_lattice_stock_state(scene, state)
+            return
+    except Exception:
+        pass
     enabled = bool(data.get('lattice_enabled', False))
     try:
         if hasattr(scene, 'mpm_lattice_management_enabled'):
@@ -613,6 +620,15 @@ def _get_current_lattice_management_enabled(scene) -> bool:
         return False
 
 
+def _get_current_lattice_stock_state(scene) -> dict:
+    """現在のラティス管理状態をストック保存用に取得する。"""
+    try:
+        from . import lattice_manager
+        return lattice_manager.export_lattice_stock_state(scene)
+    except Exception:
+        return {'lattice_enabled': _get_current_lattice_management_enabled(scene)}
+
+
 def _build_current_camera_saved_item(scene, camera) -> dict:
     bg_image = "No File"
     bg_opacity = 1.0
@@ -651,6 +667,7 @@ def _build_current_camera_saved_item(scene, camera) -> dict:
         'record_selected_objects': bool(getattr(scene, 'record_selected_objects', False)),
         'selected_objects': selected_objects,
         'lattice_enabled': _get_current_lattice_management_enabled(scene),
+        'lattice_state': _get_current_lattice_stock_state(scene),
         'created_at': float(time.time()),
     }
 
@@ -2169,5 +2186,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.164
+# Version Footer: 1.173
 # -------------------------------

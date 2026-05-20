@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.164）:
-# - 追加データ記録の「ラティスをON」チェックを削除
-# - ラティス状態は「ラティス管理有効」の現在状態を自動記録
+# 変更点（1.173）:
+# - 複数登録セット使用スイッチを追加
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 164),
+    "version": (1, 0, 173),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -34,5 +33,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.164
+# Version Footer: 1.173
 # -------------------------------

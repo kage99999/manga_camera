@@ -2,9 +2,8 @@
 # ファイル名：lattice_manager.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション
-# 変更点（1.164）:
-# - ラティス管理OFF時にセクション内をグレーアウト
-# - ラティス管理OFF時に登録ラティスOBJを非表示化し、ON時に元の表示状態へ復元
+# 変更点（1.173）:
+# - 複数登録セット使用スイッチを追加し、単独セット運用時はカレントセットだけを有効化
 
 import bpy
 import uuid
@@ -14,8 +13,12 @@ import uuid
 # ラティス管理用の定数
 # =========================
 LATTICE_MANAGER_TAG = "manga_camera_lattice_manager"
-LATTICE_MODIFIER_NAME = "ラティス_アドオンセット"
+LATTICE_MODIFIER_NAME = "ラティ_ラティ"
+SUBDIVISION_MODIFIER_NAME = "ラティ_サブディ"
+SUBDIVISION_LEGACY_MODIFIER_PREFIXES = ("ラティ_サブディ", "サブディビジョン_アドオンセット", "サブディビジョン", "Subdivision", "Subsurf", "SubD")
 LATTICE_LEGACY_MODIFIER_PREFIX = "MC_Lattice_"
+SUBDIVISION_MODIFIER_ROLE = "subdivision"
+LATTICE_MODIFIER_ROLE = "lattice"
 LATTICE_SET_ENUM_CACHE = []
 LATTICE_SET_ENUM_STRING_POOL = {}
 LATTICE_GLOBAL_FORCED_KEY = "mpm_lattice_global_forced_disabled"
@@ -48,10 +51,38 @@ def _safe_name(value, fallback="登録セット"):
     return text if text else fallback
 
 
+def _lattice_set_order_number(lattice_set):
+    """登録セットの現在順から、表示用の1始まり番号を返す。"""
+    if lattice_set is None:
+        return 1
+    try:
+        scene = getattr(lattice_set, "id_data", None)
+        sets = _get_lattice_sets(scene) if scene is not None else None
+        target_uid = _ensure_set_uid(lattice_set)
+        if sets is not None:
+            for index, item in enumerate(sets):
+                if _ensure_set_uid(item) == target_uid:
+                    return index + 1
+    except Exception:
+        pass
+    return 1
+
+
+def _lattice_set_order_prefix(lattice_set):
+    """登録セット番号を 01 のような2桁表記にする。"""
+    return f"{_lattice_set_order_number(lattice_set):02d}"
+
+
 def _modifier_name_for_set(lattice_set):
-    """登録セットごとに区別できるラティス管理用モディファイア名を作る。"""
+    """登録セット番号を先頭に付けたラティス管理用モディファイア名を作る。"""
     set_name = _safe_name(getattr(lattice_set, "set_name", "") if lattice_set is not None else "", "登録セット")
-    return f"{LATTICE_MODIFIER_NAME}_{set_name}"
+    return f"{_lattice_set_order_prefix(lattice_set)}_{LATTICE_MODIFIER_NAME}_{set_name}"
+
+
+def _subdivision_modifier_name_for_set(lattice_set):
+    """登録セット番号を先頭に付けたサブディビジョン管理用モディファイア名を作る。"""
+    set_name = _safe_name(getattr(lattice_set, "set_name", "") if lattice_set is not None else "", "登録セット")
+    return f"{_lattice_set_order_prefix(lattice_set)}_{SUBDIVISION_MODIFIER_NAME}_{set_name}"
 
 
 def _modifier_name_matches_set(modifier, lattice_set):
@@ -59,6 +90,27 @@ def _modifier_name_matches_set(modifier, lattice_set):
     name = str(getattr(modifier, "name", "") or "")
     target = _modifier_name_for_set(lattice_set)
     return name == target or name.startswith(target + ".")
+
+
+def _modifier_base_name_without_numeric_suffix(name):
+    """Blenderが付ける .001 のような連番を除いた名前を返す。"""
+    text = str(name or "")
+    if len(text) >= 4 and text[-4] == "." and text[-3:].isdigit():
+        return text[:-4]
+    return text
+
+
+def _subdivision_modifier_name_matches_set(modifier, lattice_set):
+    """カスタムプロパティが読めない環境向けに、名前でも現在セット用サブディビジョンMODか判定する。"""
+    name = str(getattr(modifier, "name", "") or "")
+    base_name = _modifier_base_name_without_numeric_suffix(name)
+    target = _subdivision_modifier_name_for_set(lattice_set)
+    if name == target or name.startswith(target + ".") or base_name == target:
+        return True
+    set_name = _safe_name(getattr(lattice_set, "set_name", "") if lattice_set is not None else "", "")
+    if set_name and name.startswith(SUBDIVISION_MODIFIER_NAME + "_") and set_name in name:
+        return True
+    return False
 
 
 def _poll_lattice_object(self, obj):
@@ -188,6 +240,35 @@ def _clear_all_delete_candidates(scene):
     if sets is None:
         return 0
     return sum(_clear_delete_candidates(lattice_set) for lattice_set in sets)
+
+
+def _cleanup_missing_registered_objects(lattice_set):
+    """現在のBlend内に存在しないOBJ名をラティス登録OBJから自動整理する。"""
+    if lattice_set is None:
+        return 0
+    removed = 0
+    try:
+        object_count = len(lattice_set.objects)
+    except Exception:
+        return 0
+    for index in range(object_count - 1, -1, -1):
+        item = lattice_set.objects[index]
+        name = str(getattr(item, "object_name", "") or "")
+        if not name or bpy.data.objects.get(name) is None:
+            try:
+                lattice_set.objects.remove(index)
+                removed += 1
+            except Exception:
+                pass
+    try:
+        if len(lattice_set.objects) == 0:
+            lattice_set.object_index = 0
+        else:
+            current = int(getattr(lattice_set, "object_index", 0) or 0)
+            lattice_set.object_index = max(0, min(current, len(lattice_set.objects) - 1))
+    except Exception:
+        pass
+    return removed
 
 
 def _iter_registered_object_items(lattice_set, include_delete_candidates=True):
@@ -331,7 +412,10 @@ def _iter_all_lattice_manager_modifiers(scene=None):
                 if not _is_modifier_area_supported(obj):
                     continue
                 for mod in list(getattr(obj, "modifiers", []) or []):
-                    is_current_set_mod = _is_managed_lattice_modifier_for_set(mod, lattice_set)
+                    is_current_set_mod = (
+                        _is_managed_lattice_modifier_for_set(mod, lattice_set)
+                        or _is_managed_subdivision_modifier_for_set(mod, lattice_set)
+                    )
                     is_linked_legacy_mod = _modifier_links_to_lattice_manager_sets(mod, scene)
                     is_named_or_tagged_mod = _is_lattice_manager_candidate_modifier(mod, scene)
                     if not (is_current_set_mod or is_linked_legacy_mod or is_named_or_tagged_mod):
@@ -520,7 +604,13 @@ def apply_lattice_management_enabled(scene, enabled):
         else:
             if _force_disable_modifier_preserve(mod):
                 changed += 1
-    changed += _apply_registered_lattice_object_visibility(scene, enabled)
+    if enabled:
+        for lattice_obj in _iter_registered_lattice_objects(scene):
+            if _restore_lattice_object_from_global_hide(lattice_obj):
+                changed += 1
+        changed += apply_lattice_set_activation_state(scene)
+    else:
+        changed += _apply_registered_lattice_object_visibility(scene, False)
     try:
         if bpy.context is not None and bpy.context.view_layer is not None:
             bpy.context.view_layer.update()
@@ -537,6 +627,97 @@ def _is_lattice_management_enabled(scene):
         return bool(getattr(scene, "mpm_lattice_management_enabled", True))
     except Exception:
         return True
+
+
+def _is_lattice_multi_set_enabled(scene):
+    """複数登録セット使用スイッチの現在値を返す。"""
+    if scene is None or not hasattr(scene, "mpm_lattice_multi_set_enabled"):
+        return False
+    try:
+        return bool(getattr(scene, "mpm_lattice_multi_set_enabled", False))
+    except Exception:
+        return False
+
+
+def _active_lattice_set_uid(scene):
+    """現在の登録セットUIDを返す。"""
+    active = _get_active_lattice_set(scene) if scene is not None else None
+    return _ensure_set_uid(active) if active is not None else ""
+
+
+def _set_lattice_object_visible_direct(lattice_obj, visible):
+    """単独／複数セット運用に合わせて、登録ラティスOBJの表示を直接切り替える。"""
+    if lattice_obj is None:
+        return False
+    try:
+        lattice_obj.hide_viewport = not bool(visible)
+        try:
+            lattice_obj.hide_render = not bool(visible)
+        except Exception:
+            pass
+        try:
+            lattice_obj.update_tag(refresh={'OBJECT'})
+        except TypeError:
+            lattice_obj.update_tag()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _set_single_lattice_set_effective_enabled(scene, lattice_set, enabled):
+    """指定セットに属する管理MODだけを実効ON/OFFする。"""
+    if lattice_set is None:
+        return 0
+    count = 0
+    for obj in _iter_registered_existing_objects(lattice_set):
+        for mod in _iter_managed_modifiers_for_set_on_object(obj, lattice_set):
+            if _set_single_modifier_enabled_from_set(scene, lattice_set, mod, enabled_override=bool(enabled)):
+                count += 1
+    return count
+
+
+def _effective_lattice_set_enabled(scene, lattice_set):
+    """現在の運用モードにおいて、指定セットが有効扱いか返す。"""
+    if scene is None or lattice_set is None:
+        return False
+    if not _is_lattice_management_enabled(scene):
+        return False
+    if _is_lattice_multi_set_enabled(scene):
+        return bool(getattr(lattice_set, "modifiers_enabled", True))
+    return _ensure_set_uid(lattice_set) == _active_lattice_set_uid(scene)
+
+
+def apply_lattice_set_activation_state(scene):
+    """複数登録セット使用のON/OFFに合わせて、各セットのMODとラティスOBJ表示を同期する。"""
+    if scene is None or not _is_lattice_management_enabled(scene):
+        return 0
+    sets = _get_lattice_sets(scene)
+    if sets is None:
+        return 0
+    changed = 0
+    lattice_visibility = {}
+    for lattice_set in sets:
+        set_enabled = _effective_lattice_set_enabled(scene, lattice_set)
+        changed += _set_single_lattice_set_effective_enabled(scene, lattice_set, set_enabled)
+        lattice_obj = getattr(lattice_set, "lattice_obj", None)
+        if lattice_obj is not None and getattr(lattice_obj, "type", "") == 'LATTICE':
+            name = str(getattr(lattice_obj, "name", "") or "")
+            if name:
+                lattice_visibility[name] = bool(lattice_visibility.get(name, False) or set_enabled)
+    for lattice_obj in _iter_registered_lattice_objects(scene):
+        name = str(getattr(lattice_obj, "name", "") or "")
+        if not name:
+            continue
+        if _set_lattice_object_visible_direct(lattice_obj, bool(lattice_visibility.get(name, False))):
+            changed += 1
+    try:
+        if getattr(bpy.context, "view_layer", None) is not None:
+            bpy.context.view_layer.update()
+    except Exception:
+        pass
+    return changed
 
 
 def _on_lattice_management_enabled_update(self, context):
@@ -560,12 +741,20 @@ def _respect_global_lattice_management_state(scene, modifier):
 
 
 def _modifier_name_is_lattice_manager_style(modifier):
-    """このアドオンが作った可能性が高いラティスMOD名か判定する。"""
+    """このアドオンが作った可能性が高い管理MOD名か判定する。"""
     name = str(getattr(modifier, "name", "") or "")
+    parts = name.split("_", 3)
+    has_numbered_lattice_prefix = len(parts) >= 4 and parts[0].isdigit() and parts[1] == "ラティ" and parts[2] in {"ラティ", "サブディ"}
     return (
-        name == LATTICE_MODIFIER_NAME
+        has_numbered_lattice_prefix
+        or name == LATTICE_MODIFIER_NAME
         or name.startswith(LATTICE_MODIFIER_NAME + ".")
         or name.startswith(LATTICE_MODIFIER_NAME + "_")
+        or name.startswith(SUBDIVISION_MODIFIER_NAME + ".")
+        or name.startswith(SUBDIVISION_MODIFIER_NAME + "_")
+        or name == SUBDIVISION_MODIFIER_NAME
+        or name.startswith("ラティス_アドオンセット")
+        or name.startswith("サブディビジョン_アドオンセット")
         or name.startswith(LATTICE_LEGACY_MODIFIER_PREFIX)
     )
 
@@ -588,7 +777,8 @@ def _is_managed_lattice_modifier_for_set(modifier, lattice_set):
     set_uid = _ensure_set_uid(lattice_set)
     created_by = _modifier_custom_get(modifier, "created_by")
     stored_uid = _modifier_custom_get(modifier, "set_uid")
-    if created_by == LATTICE_MANAGER_TAG and stored_uid == set_uid:
+    stored_role = _modifier_custom_get(modifier, "modifier_role")
+    if created_by == LATTICE_MANAGER_TAG and stored_uid == set_uid and (not stored_role or stored_role == LATTICE_MODIFIER_ROLE):
         return True
     if stored_uid and stored_uid != set_uid:
         return False
@@ -599,27 +789,109 @@ def _is_managed_lattice_modifier_for_set(modifier, lattice_set):
     return False
 
 
+def _is_managed_subdivision_modifier_for_set(modifier, lattice_set):
+    """現在セット用の管理サブディビジョンMODか、ID優先・名前補助で判定する。"""
+    if lattice_set is None or getattr(modifier, "type", "") != 'SUBSURF':
+        return False
+    set_uid = _ensure_set_uid(lattice_set)
+    created_by = _modifier_custom_get(modifier, "created_by")
+    stored_uid = str(_modifier_custom_get(modifier, "set_uid", "") or "")
+    stored_role = str(_modifier_custom_get(modifier, "modifier_role", "") or "")
+    name_matches = _subdivision_modifier_name_matches_set(modifier, lattice_set)
+    if created_by == LATTICE_MANAGER_TAG and stored_uid == set_uid and (not stored_role or stored_role == SUBDIVISION_MODIFIER_ROLE):
+        return True
+    if name_matches:
+        return True
+    if created_by == LATTICE_MANAGER_TAG and (not stored_uid or stored_uid == set_uid) and (not stored_role or stored_role == SUBDIVISION_MODIFIER_ROLE):
+        return True
+    if stored_uid and stored_uid != set_uid:
+        return False
+    return False
+
+
+def _subdivision_modifier_has_manager_style_name(modifier):
+    """このアドオンが作った可能性が高いサブディビジョンMOD名か判定する。"""
+    name = str(getattr(modifier, "name", "") or "")
+    return any(name == prefix or name.startswith(prefix + ".") or name.startswith(prefix + "_") for prefix in SUBDIVISION_LEGACY_MODIFIER_PREFIXES)
+
+
+def _looks_like_current_set_subdivision_modifier(obj, modifier, lattice_set, lattice_modifier=None):
+    """タグ不足の旧サブディビジョンMODを現在セット用として回収できるか判定する。"""
+    if lattice_set is None or getattr(modifier, "type", "") != 'SUBSURF':
+        return False
+    if _is_managed_subdivision_modifier_for_set(modifier, lattice_set):
+        return True
+    set_uid = _ensure_set_uid(lattice_set)
+    created_by = _modifier_custom_get(modifier, "created_by")
+    stored_uid = str(_modifier_custom_get(modifier, "set_uid", "") or "")
+    stored_role = str(_modifier_custom_get(modifier, "modifier_role", "") or "")
+    if stored_uid and stored_uid != set_uid:
+        return False
+    if created_by == LATTICE_MANAGER_TAG and (not stored_role or stored_role == SUBDIVISION_MODIFIER_ROLE):
+        return True
+    if not _subdivision_modifier_has_manager_style_name(modifier):
+        return False
+    if lattice_modifier is None and obj is not None:
+        lattice_modifier = _find_managed_lattice_modifier(obj, lattice_set)
+    if lattice_modifier is None:
+        return _subdivision_modifier_name_matches_set(modifier, lattice_set)
+    mod_index = _modifier_index(obj, modifier)
+    lattice_index = _modifier_index(obj, lattice_modifier)
+    if mod_index < 0 or lattice_index < 0:
+        return _subdivision_modifier_name_matches_set(modifier, lattice_set)
+    if mod_index <= lattice_index:
+        return True
+    return _subdivision_modifier_name_matches_set(modifier, lattice_set)
+
+
+def _collect_managed_subdivision_modifiers_for_set(obj, lattice_set, lattice_modifier=None):
+    """指定OBJ上の現在セット用サブディビジョン管理MOD候補をすべて集める。"""
+    if not _is_modifier_area_supported(obj) or lattice_set is None:
+        return []
+    if lattice_modifier is None:
+        lattice_modifier = _find_managed_lattice_modifier(obj, lattice_set)
+    result = []
+    for mod in list(getattr(obj, "modifiers", []) or []):
+        if _looks_like_current_set_subdivision_modifier(obj, mod, lattice_set, lattice_modifier):
+            result.append(mod)
+    return result
+
+
 def _is_lattice_manager_candidate_modifier(modifier, scene=None):
-    """旧版を含め、このアドオン由来とみなせるラティスMODか判定する。"""
-    if getattr(modifier, "type", "") != 'LATTICE':
+    """旧版を含め、このアドオン由来とみなせる管理MODか判定する。"""
+    mod_type = getattr(modifier, "type", "")
+    if mod_type not in {'LATTICE', 'SUBSURF'}:
         return False
     created_by = _modifier_custom_get(modifier, "created_by")
     if created_by == LATTICE_MANAGER_TAG:
         return True
     if _modifier_name_is_lattice_manager_style(modifier):
         return True
-    if _modifier_links_to_lattice_manager_sets(modifier, scene):
+    if mod_type == 'LATTICE' and _modifier_links_to_lattice_manager_sets(modifier, scene):
         return True
     return False
 
 
 def _tag_lattice_modifier_for_set(modifier, lattice_set):
-    """管理対象MODに現在セットの識別情報を付ける。"""
+    """管理対象ラティスMODに現在セットの識別情報を付ける。"""
     set_uid = _ensure_set_uid(lattice_set)
     _modifier_custom_set(modifier, "created_by", LATTICE_MANAGER_TAG)
     _modifier_custom_set(modifier, "set_uid", set_uid)
+    _modifier_custom_set(modifier, "modifier_role", LATTICE_MODIFIER_ROLE)
     try:
         modifier.name = _modifier_name_for_set(lattice_set)
+    except Exception:
+        pass
+
+
+def _tag_subdivision_modifier_for_set(modifier, lattice_set):
+    """管理対象サブディビジョンMODに現在セットの識別情報を付ける。"""
+    set_uid = _ensure_set_uid(lattice_set)
+    _modifier_custom_set(modifier, "created_by", LATTICE_MANAGER_TAG)
+    _modifier_custom_set(modifier, "set_uid", set_uid)
+    _modifier_custom_set(modifier, "modifier_role", SUBDIVISION_MODIFIER_ROLE)
+    try:
+        modifier.name = _subdivision_modifier_name_for_set(lattice_set)
     except Exception:
         pass
 
@@ -653,6 +925,51 @@ def _cleanup_duplicate_managed_lattice_modifiers(obj, lattice_set, keep_modifier
     return removed
 
 
+def _find_managed_subdivision_modifier(obj, lattice_set):
+    """指定OBJから現在の登録セット用の管理サブディビジョンMODを1つ探す。"""
+    candidates = _collect_managed_subdivision_modifiers_for_set(obj, lattice_set)
+    if not candidates:
+        return None
+    keep = candidates[0]
+    _tag_subdivision_modifier_for_set(keep, lattice_set)
+    return keep
+
+
+def _cleanup_duplicate_managed_subdivision_modifiers(obj, lattice_set, keep_modifier):
+    """同じOBJ・同じ登録セット用の管理サブディビジョンMODが複数ある場合、1つだけ残す。"""
+    if not _is_modifier_area_supported(obj) or keep_modifier is None or lattice_set is None:
+        return 0
+    removed = 0
+    for mod in _collect_managed_subdivision_modifiers_for_set(obj, lattice_set):
+        if mod == keep_modifier:
+            continue
+        try:
+            obj.modifiers.remove(mod)
+            removed += 1
+        except Exception:
+            pass
+    return removed
+
+
+def _iter_managed_modifiers_for_set_on_object(obj, lattice_set):
+    """指定OBJ上の現在セット用管理MODを、ラティスとサブディビジョン両方返す。"""
+    if not _is_modifier_area_supported(obj) or lattice_set is None:
+        return []
+    result = []
+    seen = set()
+    lattice_mod = _find_managed_lattice_modifier(obj, lattice_set)
+    if lattice_mod is not None:
+        result.append(lattice_mod)
+        seen.add(_modifier_unique_key(lattice_mod))
+    for mod in _collect_managed_subdivision_modifiers_for_set(obj, lattice_set, lattice_mod):
+        key = _modifier_unique_key(mod)
+        if key in seen:
+            continue
+        result.append(mod)
+        seen.add(key)
+    return result
+
+
 def _iter_registered_existing_objects(lattice_set, include_delete_candidates=False):
     """ラティス登録OBJのうち現在存在するOBJだけを返す。未確定の削除候補は標準では除外する。"""
     for name in _iter_registered_object_names(lattice_set, include_delete_candidates=include_delete_candidates):
@@ -661,11 +978,41 @@ def _iter_registered_existing_objects(lattice_set, include_delete_candidates=Fal
             yield obj
 
 
-def _count_managed_modifiers(lattice_set):
-    """ラティス登録OBJのうち管理MODが付いている数を数える。"""
+def _count_managed_lattice_modifiers(lattice_set):
+    """ラティス登録OBJのうち管理ラティスMODが付いている数を数える。"""
     count = 0
     for obj in _iter_registered_existing_objects(lattice_set):
         if _find_managed_lattice_modifier(obj, lattice_set) is not None:
+            count += 1
+    return count
+
+
+def _count_managed_subdivision_modifiers(lattice_set):
+    """ラティス登録OBJのうち管理サブディビジョンMODが付いている数を数える。"""
+    count = 0
+    for obj in _iter_registered_existing_objects(lattice_set):
+        if _find_managed_subdivision_modifier(obj, lattice_set) is not None:
+            count += 1
+    return count
+
+
+def _count_managed_modifiers(lattice_set):
+    """現在設定上必要な管理MODが揃っている登録OBJ数を数える。"""
+    count = 0
+    use_subdivision = bool(getattr(lattice_set, "use_subdivision", False)) if lattice_set is not None else False
+    for obj in _iter_registered_existing_objects(lattice_set):
+        has_lattice = _find_managed_lattice_modifier(obj, lattice_set) is not None
+        has_subdivision = (not use_subdivision) or (_find_managed_subdivision_modifier(obj, lattice_set) is not None)
+        if has_lattice and has_subdivision:
+            count += 1
+    return count
+
+
+def _count_any_managed_modifiers_for_set(lattice_set):
+    """現在セットに属する管理MODが1つ以上あるOBJ数を数える。"""
+    count = 0
+    for obj in _iter_registered_existing_objects(lattice_set, include_delete_candidates=True):
+        if _iter_managed_modifiers_for_set_on_object(obj, lattice_set):
             count += 1
     return count
 
@@ -843,6 +1190,113 @@ def _set_modifier_lattice_object(modifier, lattice_obj):
     except Exception:
         return True
 
+def _configure_subdivision_modifier(modifier, level):
+    """管理サブディビジョンMODをシンプル方式・指定レベルへ設定する。"""
+    if modifier is None or getattr(modifier, "type", "") != 'SUBSURF':
+        return False
+    try:
+        modifier.subdivision_type = 'SIMPLE'
+    except Exception:
+        pass
+    try:
+        modifier.levels = int(level)
+        modifier.render_levels = int(level)
+        return True
+    except Exception:
+        return False
+
+
+def _remove_current_set_subdivision_modifier_from_object(obj, lattice_set):
+    """指定OBJから現在セット用の管理サブディビジョンMODだけを削除する。"""
+    if obj is None or not _is_modifier_area_supported(obj):
+        return 0
+    removed = 0
+    for mod in _collect_managed_subdivision_modifiers_for_set(obj, lattice_set):
+        try:
+            obj.modifiers.remove(mod)
+            removed += 1
+        except Exception:
+            pass
+    return removed
+
+
+def _modifier_index(obj, modifier):
+    """指定MODの現在インデックスを返す。"""
+    try:
+        for index, candidate in enumerate(list(getattr(obj, "modifiers", []) or [])):
+            if candidate == modifier:
+                return index
+    except Exception:
+        pass
+    return -1
+
+
+def _move_modifier_to_index(obj, modifier, target_index):
+    """モディファイアを指定インデックスへ移動する。"""
+    if obj is None or modifier is None:
+        return False
+    try:
+        current_index = _modifier_index(obj, modifier)
+        if current_index < 0:
+            return False
+        target_index = max(0, int(target_index))
+        if current_index == target_index:
+            return True
+        modifiers = getattr(obj, "modifiers", None)
+        if modifiers is not None and hasattr(modifiers, "move"):
+            modifiers.move(current_index, target_index)
+            return True
+    except Exception:
+        pass
+    try:
+        _ensure_object_mode(bpy.context)
+        previous_active = getattr(bpy.context.view_layer.objects, "active", None)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.modifier_move_to_index(modifier=str(getattr(modifier, "name", "") or ""), index=int(target_index))
+        if previous_active is not None:
+            bpy.context.view_layer.objects.active = previous_active
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_subdivision_before_lattice(obj, subdivision_mod, lattice_mod):
+    """サブディビジョンMODをラティスMODの前に並べる。"""
+    if obj is None or subdivision_mod is None or lattice_mod is None:
+        return False
+    sub_index = _modifier_index(obj, subdivision_mod)
+    lat_index = _modifier_index(obj, lattice_mod)
+    if sub_index < 0 or lat_index < 0:
+        return False
+    if sub_index < lat_index:
+        return True
+    return _move_modifier_to_index(obj, subdivision_mod, lat_index)
+
+
+def _set_single_modifier_enabled_from_set(scene, lattice_set, modifier, enabled_override=None):
+    """現在セットのモディファイア有効チェックと全体スイッチを単一MODへ反映する。"""
+    if modifier is None:
+        return False
+    enabled = bool(enabled_override) if enabled_override is not None else (bool(getattr(lattice_set, "modifiers_enabled", True)) if lattice_set is not None else True)
+    try:
+        if _is_lattice_management_enabled(scene):
+            _modifier_custom_delete(modifier, LATTICE_GLOBAL_FORCED_KEY)
+            _modifier_custom_delete(modifier, LATTICE_GLOBAL_PREV_VIEWPORT_KEY)
+            _modifier_custom_delete(modifier, LATTICE_GLOBAL_PREV_RENDER_KEY)
+            modifier.show_viewport = enabled
+            modifier.show_render = enabled
+        else:
+            _modifier_custom_set(modifier, LATTICE_GLOBAL_PREV_VIEWPORT_KEY, enabled)
+            _modifier_custom_set(modifier, LATTICE_GLOBAL_PREV_RENDER_KEY, enabled)
+            _modifier_custom_set(modifier, LATTICE_GLOBAL_FORCED_KEY, True)
+            modifier.show_viewport = False
+            modifier.show_render = False
+        _tag_modifier_owner_for_update(modifier)
+        return True
+    except Exception:
+        return False
+
+
 def _refresh_lattice_modifiers_for_set(context, lattice_set):
     """ラティスOBJ変更時に既存管理MODだけへ反映する。"""
     if lattice_set is None:
@@ -860,21 +1314,157 @@ def _refresh_lattice_modifiers_for_set(context, lattice_set):
     return updated
 
 
-def _rename_managed_modifiers_for_set(context, lattice_set):
-    """セット名変更時に管理MOD名も合わせる。"""
-    if lattice_set is None:
-        return 0
-    new_name = _modifier_name_for_set(lattice_set)
-    renamed = 0
-    for obj in _iter_registered_existing_objects(lattice_set):
-        mod = _find_managed_lattice_modifier(obj, lattice_set)
-        if mod is None:
+def _modifier_belongs_to_set_uid(modifier, lattice_set, modifier_role, modifier_type):
+    """set_uidを基準に、指定セットの管理MODか判定する。"""
+    if modifier is None or lattice_set is None:
+        return False
+    if getattr(modifier, "type", "") != modifier_type:
+        return False
+    set_uid = _ensure_set_uid(lattice_set)
+    created_by = _modifier_custom_get(modifier, "created_by")
+    stored_uid = str(_modifier_custom_get(modifier, "set_uid", "") or "")
+    stored_role = str(_modifier_custom_get(modifier, "modifier_role", "") or "")
+    if created_by != LATTICE_MANAGER_TAG and stored_uid != set_uid:
+        return False
+    if stored_uid != set_uid:
+        return False
+    if stored_role and stored_role != modifier_role:
+        return False
+    return True
+
+
+def _modifier_name_contains_set_name_for_role(modifier, lattice_set, role_prefix):
+    """UIDが無い／弱い管理MODを、名前に含まれるセット名と役割名から拾う。"""
+    if modifier is None or lattice_set is None:
+        return False
+    name = _modifier_base_name_without_numeric_suffix(str(getattr(modifier, "name", "") or ""))
+    set_name = _safe_name(getattr(lattice_set, "set_name", "") if lattice_set is not None else "", "")
+    if not name or not set_name:
+        return False
+    return (role_prefix in name) and name.endswith("_" + set_name)
+
+
+def _modifier_belongs_to_set_for_rename(modifier, lattice_set, modifier_role, modifier_type):
+    """登録セットの順番変更時にリネームしてよい管理MODか判定する。
+
+    通常は set_uid を優先する。旧版や途中版でタグが弱い場合だけ、
+    新形式名に含まれる役割名＋登録セット名で補足する。
+    """
+    if modifier is None or lattice_set is None:
+        return False
+    if getattr(modifier, "type", "") != modifier_type:
+        return False
+    if _modifier_belongs_to_set_uid(modifier, lattice_set, modifier_role, modifier_type):
+        return True
+    stored_uid = str(_modifier_custom_get(modifier, "set_uid", "") or "")
+    if stored_uid:
+        return False
+    if modifier_type == 'LATTICE':
+        return _modifier_name_contains_set_name_for_role(modifier, lattice_set, LATTICE_MODIFIER_NAME)
+    if modifier_type == 'SUBSURF':
+        return _modifier_name_contains_set_name_for_role(modifier, lattice_set, SUBDIVISION_MODIFIER_NAME)
+    return False
+
+
+def _iter_all_modifier_owner_objects():
+    """全OBJからモディファイアを持つ可能性のあるOBJだけを返す。"""
+    try:
+        objects = list(getattr(bpy.data, "objects", []) or [])
+    except Exception:
+        objects = []
+    for obj in objects:
+        if _is_modifier_area_supported(obj):
+            yield obj
+
+
+def _collect_rename_targets_for_sets(scene, target_sets=None):
+    """現在の登録セット順に合わせてリネーム対象MODを集める。"""
+    if target_sets is None:
+        target_sets = _get_lattice_sets(scene)
+    if target_sets is None:
+        return []
+    entries = []
+    seen = set()
+    for lattice_set in list(target_sets):
+        if lattice_set is None:
             continue
+        lattice_name = _modifier_name_for_set(lattice_set)
+        subdivision_name = _subdivision_modifier_name_for_set(lattice_set)
+        for obj in _iter_all_modifier_owner_objects():
+            for mod in list(getattr(obj, "modifiers", []) or []):
+                key = _modifier_unique_key(mod)
+                if key in seen:
+                    continue
+                if _modifier_belongs_to_set_for_rename(mod, lattice_set, LATTICE_MODIFIER_ROLE, 'LATTICE'):
+                    entries.append((obj, mod, lattice_set, LATTICE_MODIFIER_ROLE, lattice_name))
+                    seen.add(key)
+                elif _modifier_belongs_to_set_for_rename(mod, lattice_set, SUBDIVISION_MODIFIER_ROLE, 'SUBSURF'):
+                    entries.append((obj, mod, lattice_set, SUBDIVISION_MODIFIER_ROLE, subdivision_name))
+                    seen.add(key)
+    return entries
+
+
+def _apply_modifier_rename_entries(entries):
+    """同名衝突を避けるため一度一時名へ逃がしてから正式リネームする。"""
+    if not entries:
+        return 0
+    renamed = 0
+    temp_entries = []
+    for index, (obj, mod, lattice_set, role, target_name) in enumerate(entries):
         try:
-            mod.name = new_name
-            renamed += 1
+            current_name = str(getattr(mod, "name", "") or "")
+        except Exception:
+            current_name = ""
+        temp_name = f"__mpm_lattice_tmp_{index:04d}__"
+        try:
+            if current_name != target_name:
+                mod.name = temp_name
+                temp_entries.append((obj, mod, lattice_set, role, target_name, current_name))
+            else:
+                temp_entries.append((obj, mod, lattice_set, role, target_name, current_name))
+        except Exception:
+            temp_entries.append((obj, mod, lattice_set, role, target_name, current_name))
+    for obj, mod, lattice_set, role, target_name, previous_name in temp_entries:
+        try:
+            _modifier_custom_set(mod, "created_by", LATTICE_MANAGER_TAG)
+            _modifier_custom_set(mod, "set_uid", _ensure_set_uid(lattice_set))
+            _modifier_custom_set(mod, "modifier_role", role)
+            if str(getattr(mod, "name", "") or "") != target_name:
+                mod.name = target_name
+            if previous_name != str(getattr(mod, "name", "") or ""):
+                renamed += 1
         except Exception:
             pass
+        try:
+            obj.update_tag(refresh={'OBJECT'})
+        except TypeError:
+            try:
+                obj.update_tag()
+            except Exception:
+                pass
+        except Exception:
+            pass
+    return renamed
+
+
+def _rename_managed_modifiers_for_set(context, lattice_set):
+    """セット名変更・番号変更を単一セットの管理MOD名へ反映する。"""
+    if lattice_set is None:
+        return 0
+    scene = getattr(lattice_set, "id_data", None)
+    entries = _collect_rename_targets_for_sets(scene, [lattice_set])
+    return _apply_modifier_rename_entries(entries)
+
+
+def _rename_managed_modifiers_for_all_sets(scene):
+    """登録セット削除などで番号が変わった時に、管理MOD名だけ現在順へ整える。"""
+    entries = _collect_rename_targets_for_sets(scene)
+    renamed = _apply_modifier_rename_entries(entries)
+    try:
+        if getattr(bpy.context, "view_layer", None) is not None:
+            bpy.context.view_layer.update()
+    except Exception:
+        pass
     return renamed
 
 
@@ -892,6 +1482,25 @@ def _on_set_name_update(self, context):
     try:
         _ensure_set_uid(self)
         _rename_managed_modifiers_for_set(context, self)
+    except Exception:
+        pass
+
+
+def _on_lattice_set_modifier_enabled_update(self, context):
+    """現在セットのモディファイア有効チェックを既存管理MODへ反映する。"""
+    try:
+        _ensure_set_uid(self)
+        scene = context.scene if context is not None else getattr(self, "id_data", None)
+        apply_lattice_set_activation_state(scene)
+    except Exception:
+        pass
+
+
+def _on_lattice_multi_set_update(self, context):
+    """複数登録セット使用の切り替えを管理MODとラティスOBJ表示へ反映する。"""
+    try:
+        scene = context.scene if context is not None else self
+        apply_lattice_set_activation_state(scene)
     except Exception:
         pass
 
@@ -931,13 +1540,18 @@ def _on_lattice_set_enum_update(self, context):
     for index, lattice_set in enumerate(sets):
         if _ensure_set_uid(lattice_set) == value:
             self.mpm_lattice_active_set_index = index
+            _cleanup_missing_registered_objects(lattice_set)
+            apply_lattice_set_activation_state(self)
             return
     try:
         fallback_index = int(value)
     except Exception:
         fallback_index = 0
     self.mpm_lattice_active_set_index = max(0, min(fallback_index, len(sets) - 1))
-    _ensure_active_lattice_index(self)
+    active_index = _ensure_active_lattice_index(self)
+    if 0 <= active_index < len(sets):
+        _cleanup_missing_registered_objects(sets[active_index])
+    apply_lattice_set_activation_state(self)
 
 def _unique_set_name(scene, base_name="登録セット"):
     """既存セット名と重複しない名前を作る。"""
@@ -983,6 +1597,9 @@ class MPM_LatticeSetItem(bpy.types.PropertyGroup):
     set_uid: bpy.props.StringProperty(name="内部ID", default="")
     set_name: bpy.props.StringProperty(name="登録名", default="登録セット", update=_on_set_name_update)
     lattice_obj: bpy.props.PointerProperty(name="ラティス", type=bpy.types.Object, poll=_poll_lattice_object, update=_on_lattice_object_update)
+    use_subdivision: bpy.props.BoolProperty(name="サブディビジョン付与", default=False)
+    subdivision_levels: bpy.props.IntProperty(name="サブディビジョン数", default=2, min=0, max=6)
+    modifiers_enabled: bpy.props.BoolProperty(name="モディファイア有効", default=True, update=_on_lattice_set_modifier_enabled_update)
     objects: bpy.props.CollectionProperty(type=MPM_LatticeRegisteredObjectItem)
     object_index: bpy.props.IntProperty(name="ラティス登録OBJ選択", default=0, options={'SKIP_SAVE'})
 
@@ -1131,6 +1748,9 @@ class MPM_OT_lattice_duplicate_set(bpy.types.Operator):
         duplicate.set_uid = _new_uid()
         duplicate.set_name = _unique_set_name(scene, f"{_safe_name(source.set_name)} コピー")
         duplicate.lattice_obj = getattr(source, "lattice_obj", None)
+        duplicate.use_subdivision = bool(getattr(source, "use_subdivision", False))
+        duplicate.subdivision_levels = int(getattr(source, "subdivision_levels", 2) or 2)
+        duplicate.modifiers_enabled = bool(getattr(source, "modifiers_enabled", True))
         for src_obj in getattr(source, "objects", []) or []:
             copied = duplicate.objects.add()
             copied.object_name = str(getattr(src_obj, "object_name", "") or "")
@@ -1156,6 +1776,7 @@ class MPM_OT_lattice_delete_set(bpy.types.Operator):
         lattice_set = sets[index]
         removed_mods = _delete_managed_modifiers_for_set(lattice_set)
         sets.remove(index)
+        renamed_mods = 0
         if len(sets) == 0:
             scene.mpm_lattice_active_set_index = -1
             scene.mpm_lattice_active_set_enum = "__none__"
@@ -1163,7 +1784,8 @@ class MPM_OT_lattice_delete_set(bpy.types.Operator):
             new_index = max(0, min(index, len(sets) - 1))
             scene.mpm_lattice_active_set_index = new_index
             scene.mpm_lattice_active_set_enum = _ensure_set_uid(sets[new_index])
-        self.report({'INFO'}, f"セットを削除しました / モディファイア削除: {removed_mods}")
+            renamed_mods = _rename_managed_modifiers_for_all_sets(scene)
+        self.report({'INFO'}, f"セットを削除しました / モディファイア削除: {removed_mods} / 名称整理: {renamed_mods}")
         return {'FINISHED'}
 
 
@@ -1285,18 +1907,17 @@ class MPM_OT_lattice_fit_to_registered_objects(bpy.types.Operator):
 
 
 def _remove_current_set_modifier_from_object_name(lattice_set, object_name):
-    """指定OBJ名から現在セット用の管理ラティスMODだけを削除する。"""
+    """指定OBJ名から現在セット用の管理ラティスMODとサブディビジョンMODだけを削除する。"""
     obj = bpy.data.objects.get(str(object_name or ""))
     if obj is None or not _is_modifier_area_supported(obj):
         return 0
     removed = 0
-    for mod in list(getattr(obj, "modifiers", []) or []):
-        if _is_managed_lattice_modifier_for_set(mod, lattice_set):
-            try:
-                obj.modifiers.remove(mod)
-                removed += 1
-            except Exception:
-                pass
+    for mod in list(_iter_managed_modifiers_for_set_on_object(obj, lattice_set)):
+        try:
+            obj.modifiers.remove(mod)
+            removed += 1
+        except Exception:
+            pass
     return removed
 
 
@@ -1341,17 +1962,18 @@ class MPM_OT_lattice_apply_or_update_modifiers(bpy.types.Operator):
         if lattice_set is None:
             self.report({'WARNING'}, "登録セットがありません")
             return {'CANCELLED'}
+        cleaned_missing = _cleanup_missing_registered_objects(lattice_set)
         removed_items, removed_mods = _finalize_lattice_delete_candidates(lattice_set)
         lattice_obj = getattr(lattice_set, "lattice_obj", None)
         if lattice_obj is None:
-            if removed_items > 0:
-                self.report({'INFO'}, f"削除候補を確定しました / 登録削除:{removed_items} MOD削除:{removed_mods}")
+            if cleaned_missing > 0 or removed_items > 0:
+                self.report({'INFO'}, f"整理:{cleaned_missing} 登録削除:{removed_items} MOD削除:{removed_mods}")
                 return {'FINISHED'}
             self.report({'WARNING'}, "ラティスOBJが未指定です")
             return {'CANCELLED'}
         if len(lattice_set.objects) == 0:
-            if removed_items > 0:
-                self.report({'INFO'}, f"削除候補を確定しました / 登録削除:{removed_items} MOD削除:{removed_mods}")
+            if cleaned_missing > 0 or removed_items > 0:
+                self.report({'INFO'}, f"整理:{cleaned_missing} 登録削除:{removed_items} MOD削除:{removed_mods}")
                 return {'FINISHED'}
             self.report({'WARNING'}, "ラティス登録OBJがありません")
             return {'CANCELLED'}
@@ -1361,6 +1983,12 @@ class MPM_OT_lattice_apply_or_update_modifiers(bpy.types.Operator):
         updated = 0
         skipped = 0
         mod_name = _modifier_name_for_set(lattice_set)
+        subd_name = _subdivision_modifier_name_for_set(lattice_set)
+        use_subdivision = bool(getattr(lattice_set, "use_subdivision", False))
+        subdivision_level = int(getattr(lattice_set, "subdivision_levels", 2) or 0)
+        subd_added = 0
+        subd_updated = 0
+        subd_removed = 0
         for obj in _iter_registered_existing_objects(lattice_set):
             if obj == lattice_obj:
                 skipped += 1
@@ -1380,11 +2008,31 @@ class MPM_OT_lattice_apply_or_update_modifiers(bpy.types.Operator):
             else:
                 updated += 1
             _tag_lattice_modifier_for_set(mod, lattice_set)
-            duplicates_removed = _cleanup_duplicate_managed_lattice_modifiers(obj, lattice_set, mod)
+            _cleanup_duplicate_managed_lattice_modifiers(obj, lattice_set, mod)
             if not _set_modifier_lattice_object(mod, lattice_obj):
                 skipped += 1
-            _respect_global_lattice_management_state(context.scene, mod)
-        self.report({'INFO'}, f"ラティスモディファイア処理 完了 / 登録削除:{removed_items} MOD削除:{removed_mods} 追加:{added} 更新:{updated} 除外:{skipped}")
+            subdivision_mod = _find_managed_subdivision_modifier(obj, lattice_set)
+            if use_subdivision:
+                if subdivision_mod is None:
+                    try:
+                        subdivision_mod = obj.modifiers.new(name=subd_name, type='SUBSURF')
+                        _tag_subdivision_modifier_for_set(subdivision_mod, lattice_set)
+                        subd_added += 1
+                    except Exception:
+                        skipped += 1
+                        subdivision_mod = None
+                else:
+                    subd_updated += 1
+                if subdivision_mod is not None:
+                    _tag_subdivision_modifier_for_set(subdivision_mod, lattice_set)
+                    subd_removed += _cleanup_duplicate_managed_subdivision_modifiers(obj, lattice_set, subdivision_mod)
+                    _configure_subdivision_modifier(subdivision_mod, subdivision_level)
+                    _ensure_subdivision_before_lattice(obj, subdivision_mod, mod)
+                    _set_single_modifier_enabled_from_set(context.scene, lattice_set, subdivision_mod)
+            else:
+                subd_removed += _remove_current_set_subdivision_modifier_from_object(obj, lattice_set)
+            _set_single_modifier_enabled_from_set(context.scene, lattice_set, mod)
+        self.report({'INFO'}, f"モディファイア処理 完了 / 整理:{cleaned_missing} 登録削除:{removed_items} MOD削除:{removed_mods} ラティス追加:{added} 更新:{updated} サブD追加:{subd_added} 更新:{subd_updated} 削除:{subd_removed} 除外:{skipped}")
         return {'FINISHED'}
 
 
@@ -1451,29 +2099,16 @@ def _set_managed_modifiers_enabled(lattice_set, enabled):
         return 0
     count = 0
     scene = getattr(bpy.context, "scene", None)
-    global_enabled = _is_lattice_management_enabled(scene)
     for obj in _iter_registered_existing_objects(lattice_set):
-        mod = _find_managed_lattice_modifier(obj, lattice_set)
-        if mod is None:
-            continue
-        _tag_lattice_modifier_for_set(mod, lattice_set)
-        _cleanup_duplicate_managed_lattice_modifiers(obj, lattice_set, mod)
-        try:
-            if global_enabled:
-                _modifier_custom_delete(mod, LATTICE_GLOBAL_FORCED_KEY)
-                _modifier_custom_delete(mod, LATTICE_GLOBAL_PREV_VIEWPORT_KEY)
-                _modifier_custom_delete(mod, LATTICE_GLOBAL_PREV_RENDER_KEY)
-                mod.show_viewport = bool(enabled)
-                mod.show_render = bool(enabled)
-            else:
-                _modifier_custom_set(mod, LATTICE_GLOBAL_PREV_VIEWPORT_KEY, bool(enabled))
-                _modifier_custom_set(mod, LATTICE_GLOBAL_PREV_RENDER_KEY, bool(enabled))
-                _modifier_custom_set(mod, LATTICE_GLOBAL_FORCED_KEY, True)
-                mod.show_viewport = False
-                mod.show_render = False
-            count += 1
-        except Exception:
-            pass
+        for mod in _iter_managed_modifiers_for_set_on_object(obj, lattice_set):
+            if _is_managed_lattice_modifier_for_set(mod, lattice_set):
+                _tag_lattice_modifier_for_set(mod, lattice_set)
+                _cleanup_duplicate_managed_lattice_modifiers(obj, lattice_set, mod)
+            elif _is_managed_subdivision_modifier_for_set(mod, lattice_set):
+                _tag_subdivision_modifier_for_set(mod, lattice_set)
+                _cleanup_duplicate_managed_subdivision_modifiers(obj, lattice_set, mod)
+            if _set_single_modifier_enabled_from_set(scene, lattice_set, mod, enabled_override=bool(enabled)):
+                count += 1
     return count
 
 
@@ -1486,7 +2121,7 @@ def _delete_managed_modifiers_for_set(lattice_set):
         if not _is_modifier_area_supported(obj):
             continue
         for candidate in list(getattr(obj, "modifiers", []) or []):
-            if _is_managed_lattice_modifier_for_set(candidate, lattice_set):
+            if _is_managed_lattice_modifier_for_set(candidate, lattice_set) or _is_managed_subdivision_modifier_for_set(candidate, lattice_set):
                 try:
                     obj.modifiers.remove(candidate)
                     count += 1
@@ -1643,7 +2278,7 @@ def _draw_modifier_management_panel(layout, context, lattice_set):
     lattice_obj = getattr(lattice_set, "lattice_obj", None) if lattice_set is not None else None
     registered_count = len(lattice_set.objects) if lattice_set is not None else 0
     valid_count = _valid_registered_object_count(lattice_set) if lattice_set is not None else 0
-    managed_count = _count_managed_modifiers(lattice_set) if lattice_set is not None else 0
+    managed_count = _count_any_managed_modifiers_for_set(lattice_set) if lattice_set is not None else 0
     mod_name = _modifier_name_for_set(lattice_set) if lattice_set is not None else "未作成"
 
     if lattice_obj is not None:
@@ -1653,6 +2288,18 @@ def _draw_modifier_management_panel(layout, context, lattice_set):
         disabled.enabled = False
         disabled.label(text="対象ラティス：未指定")
     body.label(text=f"モディファイア名：{mod_name}")
+
+    if lattice_set is not None:
+        body.prop(lattice_set, "use_subdivision", text="サブディビジョン付与")
+        subd_col = body.column(align=True)
+        subd_col.enabled = bool(getattr(lattice_set, "use_subdivision", False))
+        subd_col.prop(lattice_set, "subdivision_levels", text="サブディビジョン数")
+        modifier_enabled_row = body.row(align=True)
+        if _is_lattice_multi_set_enabled(context.scene):
+            modifier_enabled_row.prop(lattice_set, "modifiers_enabled", text="モディファイア有効")
+        else:
+            modifier_enabled_row.enabled = False
+            modifier_enabled_row.label(text="モディファイア有効（カレント固定）", icon='CHECKBOX_HLT')
 
     ready = lattice_set is not None and lattice_obj is not None and registered_count > 0 and valid_count > 0
 
@@ -1665,15 +2312,8 @@ def _draw_modifier_management_panel(layout, context, lattice_set):
     apply_row.enabled = ready
     apply_row.operator("camera.lattice_apply_or_update_modifiers", text="追加 / 更新")
 
-    mod_ready = lattice_set is not None and managed_count > 0
-    row = body.row(align=True)
-    row.enabled = mod_ready
-    row.operator("camera.lattice_enable_modifiers", text="有効")
-    row.operator("camera.lattice_disable_modifiers", text="無効")
-
-    delete_row = body.row(align=True)
-    delete_row.enabled = mod_ready
-    delete_row.operator("camera.lattice_delete_modifiers", text="削除", icon='TRASH')
+    # モディファイア単体削除ボタンはUIから撤去する。
+    # 登録対象から外したい場合は「登録削除」→「追加 / 更新」で現在セット用MODも整理する。
 
 def _draw_status_panel(layout, context, lattice_set):
     """現在セットの状態を描く。"""
@@ -1691,6 +2331,9 @@ def _draw_status_panel(layout, context, lattice_set):
     registered_total = len(lattice_set.objects)
     valid_total = _valid_registered_object_count(lattice_set)
     managed_total = _count_managed_modifiers(lattice_set)
+    lattice_total = _count_managed_lattice_modifiers(lattice_set)
+    subdivision_total = _count_managed_subdivision_modifiers(lattice_set)
+    use_subdivision = bool(getattr(lattice_set, "use_subdivision", False))
     lattice_obj = getattr(lattice_set, "lattice_obj", None)
 
     body.label(text=f"ラティス登録OBJ：{registered_total}")
@@ -1699,10 +2342,99 @@ def _draw_status_panel(layout, context, lattice_set):
         warn.alert = True
         warn.label(text=f"存在するOBJ：{valid_total} / {registered_total}")
     body.label(text=f"モディファイアあり：{managed_total} / {valid_total}")
+    body.label(text=f"ラティスMOD：{lattice_total} / {valid_total}")
+    if use_subdivision:
+        body.label(text=f"サブディビジョン：{subdivision_total} / {valid_total}")
 
     lattice_row = body.row(align=True)
     lattice_row.enabled = lattice_obj is not None
     lattice_row.label(text="ラティス：指定済み" if lattice_obj is not None else "ラティス：未指定")
+
+
+# =========================
+# ストック保存用ヘルパー
+# =========================
+def export_lattice_stock_state(scene):
+    """追加データ記録へ保存するラティス状態を辞書化する。"""
+    state = {
+        "lattice_enabled": _is_lattice_management_enabled(scene),
+        "multi_set_enabled": _is_lattice_multi_set_enabled(scene),
+        "active_set_uid": _active_lattice_set_uid(scene),
+        "active_set_name": "",
+        "set_states": [],
+    }
+    active = _get_active_lattice_set(scene) if scene is not None else None
+    if active is not None:
+        state["active_set_name"] = _safe_name(getattr(active, "set_name", ""), "")
+    sets = _get_lattice_sets(scene) if scene is not None else None
+    if sets is not None:
+        for lattice_set in sets:
+            state["set_states"].append({
+                "set_uid": _ensure_set_uid(lattice_set),
+                "set_name": _safe_name(getattr(lattice_set, "set_name", ""), ""),
+                "modifiers_enabled": bool(getattr(lattice_set, "modifiers_enabled", True)),
+            })
+    return state
+
+
+def apply_lattice_stock_state(scene, state):
+    """ストックから読み込んだラティス状態を復元する。"""
+    if scene is None:
+        return 0
+    if not isinstance(state, dict):
+        state = {"lattice_enabled": bool(state)}
+    changed = 0
+    sets = _get_lattice_sets(scene)
+    set_states = state.get("set_states", [])
+    if sets is not None and isinstance(set_states, list):
+        for saved in set_states:
+            if not isinstance(saved, dict):
+                continue
+            saved_uid = str(saved.get("set_uid", "") or "")
+            saved_name = str(saved.get("set_name", "") or "")
+            for lattice_set in sets:
+                uid = _ensure_set_uid(lattice_set)
+                name = str(getattr(lattice_set, "set_name", "") or "")
+                if (saved_uid and uid == saved_uid) or (not saved_uid and saved_name and name == saved_name):
+                    try:
+                        lattice_set.modifiers_enabled = bool(saved.get("modifiers_enabled", True))
+                    except Exception:
+                        pass
+                    break
+    active_uid = str(state.get("active_set_uid", "") or "")
+    active_name = str(state.get("active_set_name", "") or "")
+    if sets is not None and len(sets) > 0:
+        target_index = None
+        for index, lattice_set in enumerate(sets):
+            uid = _ensure_set_uid(lattice_set)
+            name = str(getattr(lattice_set, "set_name", "") or "")
+            if (active_uid and uid == active_uid) or (not active_uid and active_name and name == active_name):
+                target_index = index
+                break
+        if target_index is not None:
+            try:
+                scene.mpm_lattice_active_set_index = target_index
+                scene.mpm_lattice_active_set_enum = _ensure_set_uid(sets[target_index])
+            except Exception:
+                pass
+    try:
+        if hasattr(scene, "mpm_lattice_multi_set_enabled"):
+            scene.mpm_lattice_multi_set_enabled = bool(state.get("multi_set_enabled", False))
+    except Exception:
+        pass
+    enabled = bool(state.get("lattice_enabled", state.get("enabled", False)))
+    try:
+        if hasattr(scene, "mpm_lattice_management_enabled"):
+            scene.mpm_lattice_management_enabled = enabled
+        else:
+            changed += apply_lattice_management_enabled(scene, enabled)
+    except Exception:
+        changed += apply_lattice_management_enabled(scene, enabled)
+    try:
+        changed += apply_lattice_management_enabled(scene, enabled)
+    except Exception:
+        pass
+    return changed
 
 
 # =========================
@@ -1721,8 +2453,13 @@ class VIEW3D_PT_manga_camera_lattice_manager(bpy.types.Panel):
         scene = context.scene
         layout.prop(scene, "mpm_lattice_management_enabled", text="ラティス管理有効")
         management_enabled = bool(getattr(scene, "mpm_lattice_management_enabled", True))
+        multi_row = layout.row(align=True)
+        multi_row.enabled = management_enabled
+        multi_row.prop(scene, "mpm_lattice_multi_set_enabled", text="複数登録セット使用")
         try:
-            if not management_enabled:
+            if management_enabled:
+                apply_lattice_set_activation_state(scene)
+            else:
                 apply_lattice_management_enabled(scene, False)
         except Exception:
             pass
@@ -1771,6 +2508,7 @@ def register_lattice_manager():
         "mpm_lattice_active_set_index",
         "mpm_lattice_active_set_enum",
         "mpm_lattice_management_enabled",
+        "mpm_lattice_multi_set_enabled",
     ):
         if hasattr(bpy.types.Scene, attr):
             try:
@@ -1797,6 +2535,12 @@ def register_lattice_manager():
         default=True,
         update=_on_lattice_management_enabled_update,
     )
+    bpy.types.Scene.mpm_lattice_multi_set_enabled = bpy.props.BoolProperty(
+        name="複数登録セット使用",
+        description="ON のとき、登録セットごとのモディファイア有効チェックで複数セットを同時使用します",
+        default=False,
+        update=_on_lattice_multi_set_update,
+    )
     bpy.types.WindowManager.mpm_lattice_selected_display_items = bpy.props.CollectionProperty(type=MPM_LatticeSelectedObjectDisplayItem)
     bpy.types.WindowManager.mpm_lattice_selected_display_index = bpy.props.IntProperty(default=0, options={'SKIP_SAVE'})
 
@@ -1811,6 +2555,7 @@ def unregister_lattice_manager():
         "mpm_lattice_active_set_index",
         "mpm_lattice_active_set_enum",
         "mpm_lattice_management_enabled",
+        "mpm_lattice_multi_set_enabled",
     ):
         if hasattr(bpy.types.Scene, attr):
             try:
@@ -1835,5 +2580,5 @@ def unregister_lattice_manager():
 
 # -------------------------------
 # ファイル名：lattice_manager.py
-# Version Footer: 1.164
+# Version Footer: 1.173
 # -------------------------------
