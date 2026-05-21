@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.175）:
-# - ラティス管理セクションを機能追加なしでモジュール分割
+# 変更点（1.180）:
+# - XMP付与レンダリングの通知表示修正に対応
+# - XMPの既存カメラ情報維持とレンズメーカー欄追加に対応
 
 import bpy
 import os
@@ -49,7 +50,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 175)  # 1.175
+    v = (1, 0, 180)  # 1.180
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -433,6 +434,7 @@ class CameraPositionManagerPreferences(bpy.types.AddonPreferences):
         box.label(text="Ctrl + Shift + Insert : 下絵を読み込む")
         box.label(text="Shift + ← : 前のストックデータへ")
         box.label(text="Shift + → : 次のストックデータへ")
+        box.label(text="Shift + F12 : XMP付与レンダリング")
 
 # =========================
 # データ管理
@@ -2186,5 +2188,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.175
+# Version Footer: 1.180
 # -------------------------------

@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.174）:
-# - 対象ラティス未指定時の表示を赤字警告に変更
+# 変更点（1.180）:
+# - XMP付与レンダリングの通知表示修正に合わせて更新
+# - 既存XMP情報を維持したレンズメーカー欄追加に合わせて更新
 
 import bpy
 
@@ -27,6 +28,10 @@ from .dolly import (
 
 from .all_object_data import (
     draw_all_object_data_controls,
+)
+
+from .xmp_rendering import (
+    draw_xmp_rendering_controls,
 )
 
 
@@ -937,6 +942,7 @@ def _draw_shortcut_settings_controls(layout, context):
     sub.label(text="Ctrl + Shift + Insert：下絵を読み込む")
     sub.label(text="Shift + ←：前のストックデータへ")
     sub.label(text="Shift + →：次のストックデータへ")
+    sub.label(text="Shift + F12：XMP付与レンダリング")
 
 
 def _draw_misc_controls(layout, context):
@@ -1076,6 +1082,18 @@ class VIEW3D_PT_custom_panel_misc(bpy.types.Panel):
         _draw_misc_controls(self.layout, context)
 
 
+class VIEW3D_PT_custom_panel_xmp_rendering(bpy.types.Panel):
+    bl_label = "XMP付与レンダリング"
+    bl_idname = "VIEW3D_PT_custom_panel_xmp_rendering"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'カメラ'
+    bl_order = 60
+
+    def draw(self, context):
+        draw_xmp_rendering_controls(self.layout, context)
+
+
 UI_CLASSES = (
     MPM_RecordedObjectListItemV130,
     MPM_UL_recorded_object_list_v130,
@@ -1094,6 +1112,7 @@ UI_CLASSES = (
     VIEW3D_PT_custom_panel_background,
     VIEW3D_PT_custom_panel_dolly,
     VIEW3D_PT_custom_panel_misc,
+    VIEW3D_PT_custom_panel_xmp_rendering,
 )
 
 
@@ -1187,5 +1206,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.174
+# Version Footer: 1.180
 # -------------------------------
