@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.173）:
-# - 複数登録セット使用スイッチを追加
+# 変更点（1.174）:
+# - 対象ラティス未指定時の表示を赤字警告に変更
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 173),
+    "version": (1, 0, 174),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -33,5 +33,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.173
+# Version Footer: 1.174
 # -------------------------------

@@ -2,8 +2,8 @@
 # ファイル名：lattice_manager.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション
-# 変更点（1.173）:
-# - 複数登録セット使用スイッチを追加し、単独セット運用時はカレントセットだけを有効化
+# 変更点（1.174）:
+# - 対象ラティス未指定時の表示を赤字警告に変更
 
 import bpy
 import uuid
@@ -2284,9 +2284,9 @@ def _draw_modifier_management_panel(layout, context, lattice_set):
     if lattice_obj is not None:
         body.label(text=f"対象ラティス：{lattice_obj.name}")
     else:
-        disabled = body.row(align=True)
-        disabled.enabled = False
-        disabled.label(text="対象ラティス：未指定")
+        warning = body.row(align=True)
+        warning.alert = True
+        warning.label(text="対象ラティス：ラティスを指定して下さい", icon='ERROR')
     body.label(text=f"モディファイア名：{mod_name}")
 
     if lattice_set is not None:
@@ -2580,5 +2580,5 @@ def unregister_lattice_manager():
 
 # -------------------------------
 # ファイル名：lattice_manager.py
-# Version Footer: 1.173
+# Version Footer: 1.174
 # -------------------------------
