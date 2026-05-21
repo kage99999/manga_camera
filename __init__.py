@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.174）:
-# - 対象ラティス未指定時の表示を赤字警告に変更
+# 変更点（1.175）:
+# - ラティス管理セクションを機能追加なしでモジュール分割
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 174),
+    "version": (1, 0, 175),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -33,5 +33,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.174
+# Version Footer: 1.175
 # -------------------------------
