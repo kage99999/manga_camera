@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.180）:
-# - XMP付与レンダリングの通知表示修正に合わせて更新
-# - 既存XMP情報を維持したレンズメーカー欄追加に合わせて更新
+# 変更点（1.183）:
+# - カメラストック表示下部の重複した「ストック数」行を削除
 
 import bpy
 
@@ -258,7 +257,7 @@ def _draw_transform_controls(layout, camera):
         lock_row.prop(camera, 'lock_rotation', index=axis_index, text="")
         snap_wrap = row.row(align=True)
         snap_wrap.alignment = 'RIGHT'
-        for angle in (0, 90, 180, 270):
+        for angle in (-90, 0, 90):
             btn = snap_wrap.row(align=True)
             btn.ui_units_x = 2.0
             op = btn.operator("camera.set_rotation_snap", text=str(angle))
@@ -317,10 +316,9 @@ def _draw_record_read_controls(layout, context):
         sub.alignment = 'CENTER'
         cur_idx = int(getattr(scene, "saved_camera_index", "0") or 0)
         total = len(manager.saved_camera_data)
-        sub.label(text=f"{cur_idx + 1} / {total}")
+        sub.operator("camera.reload_current_saved_stock", text=f"{cur_idx + 1} / {total}", emboss=False)
         row.operator("camera.next_saved_stock", text=">")
 
-        layout.label(text=f"ストック数: {len(manager.saved_camera_data)}")
 
 
 def _saved_data_has_recorded_objects(data):
@@ -1206,5 +1204,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.180
+# Version Footer: 1.183
 # -------------------------------

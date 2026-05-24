@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.180）:
-# - XMP付与レンダリングの通知表示修正に対応
-# - XMPの既存カメラ情報維持とレンズメーカー欄追加に対応
+# 変更点（1.183）:
+# - カメラストック表示下部の重複した「ストック数」行を削除
 
 import bpy
 import os
@@ -50,7 +49,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 180)  # 1.180
+    v = (1, 0, 183)  # 1.183
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -1056,7 +1055,7 @@ class OBJECT_OT_set_camera_location_zero(bpy.types.Operator):
 class OBJECT_OT_set_camera_rotation_snap(bpy.types.Operator):
     bl_idname = "camera.set_rotation_snap"
     bl_label = "カメラ回転をスナップ"
-    bl_description = "指定した軸の回転角度を 0 / 90 / 180 / 270 度に設定します"
+    bl_description = "指定した軸の回転角度を -90 / 0 / 90 のボタンで調整します"
 
     axis: bpy.props.EnumProperty(
         name="軸",
@@ -1072,6 +1071,32 @@ class OBJECT_OT_set_camera_rotation_snap(bpy.types.Operator):
         default=0,
     )
 
+    @staticmethod
+    def _nearest_90_degree(value_degrees):
+        """現在角度が90度刻みなら、その90度刻み角度を返す"""
+        nearest = int(round(float(value_degrees) / 90.0)) * 90
+        if abs(float(value_degrees) - float(nearest)) > 0.001:
+            return None
+        while nearest > 270:
+            nearest -= 360
+        while nearest < -270:
+            nearest += 360
+        if nearest == -0:
+            nearest = 0
+        return int(nearest)
+
+    @staticmethod
+    def _wrap_step_angle(value_degrees):
+        """90度刻みの増減後、-270～270の範囲へ折り返す"""
+        value = int(round(float(value_degrees) / 90.0)) * 90
+        while value > 270:
+            value -= 360
+        while value < -270:
+            value += 360
+        if value == -0:
+            value = 0
+        return int(value)
+
     def execute(self, context):
         scene = context.scene
         camera = _get_valid_scene_camera(scene, repair=True)
@@ -1082,8 +1107,18 @@ class OBJECT_OT_set_camera_rotation_snap(bpy.types.Operator):
         axis_map = {'X': 0, 'Y': 1, 'Z': 2}
         idx = axis_map.get(self.axis, 0)
         try:
-            from math import radians
-            camera.rotation_euler[idx] = radians(int(self.angle))
+            from math import degrees, radians
+            step = int(self.angle)
+            if step == 0:
+                target_angle = 0
+            else:
+                current_angle = degrees(float(camera.rotation_euler[idx]))
+                snapped_angle = self._nearest_90_degree(current_angle)
+                if snapped_angle is None:
+                    target_angle = step
+                else:
+                    target_angle = self._wrap_step_angle(snapped_angle + step)
+            camera.rotation_euler[idx] = radians(int(target_angle))
             if context.area:
                 context.area.tag_redraw()
             return {'FINISHED'}
@@ -1615,6 +1650,33 @@ class OBJECT_OT_next_folder_image(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class OBJECT_OT_reload_current_saved_stock(bpy.types.Operator):
+    bl_idname = "camera.reload_current_saved_stock"
+    bl_label = "現在のストックを再読み込み"
+    bl_description = "中央の番号表示をクリックした時、現在選択中のストックをもう一度読み込みます"
+
+    def execute(self, context):
+        scene = context.scene
+        camera = _get_valid_scene_camera(scene, repair=True)
+        manager = get_camera_data_manager()
+        saved_items = _ensure_manager_saved_data_normalized(manager)
+        if not camera:
+            self.report({'WARNING'}, "カメラがありません")
+            return {'CANCELLED'}
+        if not saved_items:
+            self.report({'INFO'}, "ストックがありません")
+            return {'CANCELLED'}
+        index = _safe_saved_index(scene, manager)
+        index = max(0, min(index, len(saved_items) - 1))
+        _set_saved_camera_index_safe(scene, manager, index)
+        _apply_saved_camera_data(scene, camera, manager, saved_items[index])
+        _sync_scene_saved_memo(scene, manager)
+        _apply_camera_view(context)
+        _tag_redraw_all_areas()
+        self.report({'INFO'}, f"現在のストックを再読み込みしました: {index + 1} / {len(saved_items)}")
+        return {'FINISHED'}
+
+
 class OBJECT_OT_prev_saved_stock(bpy.types.Operator):
     bl_idname = "camera.prev_saved_stock"
     bl_label = "前のストックへ"
@@ -1888,6 +1950,7 @@ CLASSES = (
     OBJECT_OT_sort_saved_data,
     OBJECT_OT_prev_folder_image,
     OBJECT_OT_next_folder_image,
+    OBJECT_OT_reload_current_saved_stock,
     OBJECT_OT_prev_saved_stock,
     OBJECT_OT_next_saved_stock,
 )
@@ -2188,5 +2251,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.180
+# Version Footer: 1.183
 # -------------------------------

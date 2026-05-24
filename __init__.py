@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.180）:
-# - XMP付与レンダリング機能を追加
-# - XMP対象フォルダ指定とShift + F12を追加
-# - レンズメーカー欄へ現在フレーム数を追加し、既存カメラ情報を維持
-# - レンダリング開始を完了通知と同じ位置に表示するよう修正
+# 変更点（1.183）:
+# - カメラストック表示下部の重複した「ストック数」行を削除
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 180),
+    "version": (1, 0, 183),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -39,5 +36,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.180
+# Version Footer: 1.183
 # -------------------------------
