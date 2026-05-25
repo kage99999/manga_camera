@@ -2,8 +2,9 @@
 # ファイル名：lattice_manager.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション
-# 変更点（1.175）:
-# - ラティス管理セクションを機能追加なしでモジュール分割
+# 変更点（1.184）:
+# - 新規セット作成時にラティスOBJも同時作成
+# - 登録名とラティスOBJ名を L_登録名 で同期
 
 import bpy
 
@@ -167,6 +168,159 @@ def _object_custom_set(obj, key, value):
         return True
     except Exception:
         return False
+
+def _lattice_object_name_for_set(lattice_set):
+    """登録名からラティスOBJ用の L_登録名 を作る。"""
+    set_name = _safe_name(getattr(lattice_set, "set_name", "") if lattice_set is not None else "", "登録セット")
+    return f"L_{set_name}"
+
+
+def _numbered_lattice_name(base_name):
+    """base.001 形式で、現在使われていないOBJ名を作る。"""
+    base = _safe_name(base_name, "L_登録セット")
+    number = 1
+    while True:
+        candidate = f"{base}.{number:03d}"
+        if bpy.data.objects.get(candidate) is None:
+            return candidate
+        number += 1
+
+
+def _rename_lattice_data_to_object_name(lattice_obj):
+    """ラティスデータ名もOBJ名へ寄せる。失敗してもOBJ名変更は維持する。"""
+    if lattice_obj is None:
+        return False
+    data = getattr(lattice_obj, "data", None)
+    if data is None:
+        return False
+    try:
+        data.name = str(getattr(lattice_obj, "name", "") or data.name)
+        return True
+    except Exception:
+        return False
+
+
+def _retire_lattice_object_to_numbered_name(lattice_obj, base_name):
+    """既存ラティスを L_登録名.001 のような退避名へ変更する。"""
+    if lattice_obj is None or getattr(lattice_obj, "type", "") != 'LATTICE':
+        return False
+    new_name = _numbered_lattice_name(base_name)
+    try:
+        lattice_obj.name = new_name
+        _rename_lattice_data_to_object_name(lattice_obj)
+        return True
+    except Exception:
+        return False
+
+
+def _rename_lattice_object_exact(lattice_obj, target_name):
+    """指定ラティスOBJを、可能な限り target_name ぴったりへ変更する。"""
+    if lattice_obj is None or getattr(lattice_obj, "type", "") != 'LATTICE':
+        return False
+    target = _safe_name(target_name, "L_登録セット")
+    conflict = bpy.data.objects.get(target)
+    if conflict is not None and conflict != lattice_obj:
+        _retire_lattice_object_to_numbered_name(conflict, target)
+    try:
+        lattice_obj.name = target
+        _rename_lattice_data_to_object_name(lattice_obj)
+        return str(getattr(lattice_obj, "name", "") or "") == target
+    except Exception:
+        return False
+
+
+def _sync_lattice_object_name_for_set(context, lattice_set):
+    """ラティス欄のOBJ名を L_登録名 に同期し、元ラティスは連番名へ退避する。"""
+    if lattice_set is None:
+        return False
+    lattice_obj = getattr(lattice_set, "lattice_obj", None)
+    if lattice_obj is None or getattr(lattice_obj, "type", "") != 'LATTICE':
+        return False
+    target_name = _lattice_object_name_for_set(lattice_set)
+    previous_name = str(getattr(lattice_set, "lattice_obj_name_cache", "") or "")
+    if previous_name:
+        previous_obj = bpy.data.objects.get(previous_name)
+        if previous_obj is not None and previous_obj != lattice_obj and getattr(previous_obj, "type", "") == 'LATTICE':
+            _retire_lattice_object_to_numbered_name(previous_obj, target_name)
+    conflict = bpy.data.objects.get(target_name)
+    if conflict is not None and conflict != lattice_obj and getattr(conflict, "type", "") == 'LATTICE':
+        _retire_lattice_object_to_numbered_name(conflict, target_name)
+    _rename_lattice_object_exact(lattice_obj, target_name)
+    try:
+        lattice_set.lattice_obj_name_cache = str(getattr(lattice_obj, "name", "") or "")
+    except Exception:
+        pass
+    try:
+        scene = context.scene if context is not None else getattr(lattice_set, "id_data", None)
+        apply_lattice_set_activation_state(scene)
+    except Exception:
+        pass
+    return True
+
+
+def _link_object_to_context_collection(context, obj):
+    """作成したOBJを、現在のコレクションまたはシーン直下へリンクする。"""
+    if obj is None:
+        return False
+    try:
+        collection = getattr(context, "collection", None)
+        if collection is not None:
+            collection.objects.link(obj)
+            return True
+    except Exception:
+        pass
+    try:
+        scene = getattr(context, "scene", None)
+        if scene is not None:
+            scene.collection.objects.link(obj)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _create_lattice_object_for_set(context, lattice_set):
+    """新規セット用のラティスOBJを作成し、ラティス欄へ自動設定する。"""
+    if lattice_set is None:
+        return None
+    target_name = _lattice_object_name_for_set(lattice_set)
+    try:
+        lattice_data = bpy.data.lattices.new(target_name)
+    except Exception:
+        return None
+    try:
+        lattice_data.points_u = 2
+        lattice_data.points_v = 2
+        lattice_data.points_w = 2
+    except Exception:
+        pass
+    try:
+        lattice_obj = bpy.data.objects.new(target_name, lattice_data)
+    except Exception:
+        try:
+            bpy.data.lattices.remove(lattice_data)
+        except Exception:
+            pass
+        return None
+    try:
+        cursor = getattr(getattr(context, "scene", None), "cursor", None)
+        if cursor is not None:
+            lattice_obj.location = cursor.location
+    except Exception:
+        pass
+    if not _link_object_to_context_collection(context, lattice_obj):
+        try:
+            bpy.data.objects.remove(lattice_obj, do_unlink=True)
+        except Exception:
+            pass
+        return None
+    try:
+        lattice_set.lattice_obj = lattice_obj
+    except Exception:
+        return lattice_obj
+    _sync_lattice_object_name_for_set(context, lattice_set)
+    return lattice_obj
+
 
 
 def _object_custom_delete(obj, key):
@@ -1124,15 +1278,17 @@ def _on_lattice_object_update(self, context):
     """ラティスOBJ欄の変更を既存管理MODへ反映する。"""
     try:
         _ensure_set_uid(self)
+        _sync_lattice_object_name_for_set(context, self)
         _refresh_lattice_modifiers_for_set(context, self)
     except Exception:
         pass
 
 
 def _on_set_name_update(self, context):
-    """登録名の変更を管理MOD名へ反映する。"""
+    """登録名の変更を管理MOD名とラティスOBJ名へ反映する。"""
     try:
         _ensure_set_uid(self)
+        _sync_lattice_object_name_for_set(context, self)
         _rename_managed_modifiers_for_set(context, self)
     except Exception:
         pass
@@ -1471,5 +1627,5 @@ def unregister_lattice_manager():
 
 # -------------------------------
 # ファイル名：lattice_manager.py
-# Version Footer: 1.175
+# Version Footer: 1.184
 # -------------------------------

@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.183）:
-# - カメラストック表示下部の重複した「ストック数」行を削除
+# 変更点（1.184）:
+# - ラティス管理の新規作成時にラティスも同時作成
+# - 登録名とラティスOBJ名の同期に対応
 
 import bpy
 import os
@@ -49,7 +50,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 183)  # 1.183
+    v = (1, 0, 184)  # 1.184
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -2251,5 +2252,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.183
+# Version Footer: 1.184
 # -------------------------------

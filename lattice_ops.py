@@ -2,13 +2,15 @@
 # ファイル名：lattice_ops.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション オペレーター
-# 変更点（1.175）:
-# - lattice_manager.py からOperator群を分離
+# 変更点（1.184）:
+# - 新規セット作成時にラティスOBJも同時作成
 
 import bpy
 from . import lattice_manager as _lm
 
 _cleanup_duplicate_managed_lattice_modifiers = _lm._cleanup_duplicate_managed_lattice_modifiers
+_create_lattice_object_for_set = _lm._create_lattice_object_for_set
+_sync_lattice_object_name_for_set = _lm._sync_lattice_object_name_for_set
 _cleanup_duplicate_managed_subdivision_modifiers = _lm._cleanup_duplicate_managed_subdivision_modifiers
 _cleanup_missing_registered_objects = _lm._cleanup_missing_registered_objects
 _clear_registered_object_checks = _lm._clear_registered_object_checks
@@ -119,7 +121,11 @@ class MPM_OT_lattice_add_set(bpy.types.Operator):
         index = len(sets) - 1
         scene.mpm_lattice_active_set_index = index
         scene.mpm_lattice_active_set_enum = item.set_uid
-        self.report({'INFO'}, "ラティス管理セットを作成しました")
+        lattice_obj = _create_lattice_object_for_set(context, item)
+        if lattice_obj is None:
+            self.report({'WARNING'}, "ラティス管理セットを作成しましたが、ラティスOBJの自動作成に失敗しました")
+            return {'FINISHED'}
+        self.report({'INFO'}, f"ラティス管理セットとラティスを作成しました: {lattice_obj.name}")
         return {'FINISHED'}
 
 
@@ -491,5 +497,5 @@ __all__ = [
 
 # -------------------------------
 # ファイル名：lattice_ops.py
-# Version Footer: 1.175
+# Version Footer: 1.184
 # -------------------------------

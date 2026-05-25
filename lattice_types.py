@@ -2,8 +2,8 @@
 # ファイル名：lattice_types.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション PropertyGroup / UIList
-# 変更点（1.175）:
-# - lattice_manager.py からPropertyGroup/UIListを分離
+# 変更点（1.184）:
+# - 登録名とラティスOBJ名の同期用キャッシュを追加
 
 import bpy
 from . import lattice_manager as _lm
@@ -32,6 +32,7 @@ class MPM_LatticeSetItem(bpy.types.PropertyGroup):
     set_uid: bpy.props.StringProperty(name="内部ID", default="")
     set_name: bpy.props.StringProperty(name="登録名", default="登録セット", update=_on_set_name_update)
     lattice_obj: bpy.props.PointerProperty(name="ラティス", type=bpy.types.Object, poll=_poll_lattice_object, update=_on_lattice_object_update)
+    lattice_obj_name_cache: bpy.props.StringProperty(name="ラティス名キャッシュ", default="")
     use_subdivision: bpy.props.BoolProperty(name="サブディビジョン付与", default=False)
     subdivision_levels: bpy.props.IntProperty(name="サブディビジョン数", default=2, min=0, max=6)
     modifiers_enabled: bpy.props.BoolProperty(name="モディファイア有効", default=True, update=_on_lattice_set_modifier_enabled_update)
@@ -100,5 +101,5 @@ __all__ = [
 
 # -------------------------------
 # ファイル名：lattice_types.py
-# Version Footer: 1.175
+# Version Footer: 1.184
 # -------------------------------
