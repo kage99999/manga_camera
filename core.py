@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.186）:
-# - 付随データ表示の文言と2列幅を調整
-# - 保存データ構造は1.185から変更なし
+# 変更点（1.188）:
+# - Alt + ← / Alt + → で画像送りセクションの前後画像送りを実行するショートカットを追加
+# - 既存の画像送りボタンと同じオペレーターを呼ぶ形で動作を統一
 
 import bpy
 import os
@@ -51,7 +51,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 186)  # 1.186
+    v = (1, 0, 188)  # 1.188
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -535,6 +535,9 @@ class CameraPositionManagerPreferences(bpy.types.AddonPreferences):
         box.label(text="Shift + ← : 前のストックデータへ")
         box.label(text="Shift + → : 次のストックデータへ")
         box.label(text="Shift + F12 : XMP付与レンダリング")
+        box.label(text="Alt + Num0 : 付随データ入力状態をリセット")
+        box.label(text="Alt + ← : 前の画像へ")
+        box.label(text="Alt + → : 次の画像へ")
 
 # =========================
 # データ管理
@@ -1780,6 +1783,40 @@ class OBJECT_OT_reload_current_saved_stock(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class OBJECT_OT_reset_attached_data_input_state(bpy.types.Operator):
+    bl_idname = "camera.reset_attached_data_input_state"
+    bl_label = "付随データ入力状態をリセット"
+    bl_description = "次回保存用の摘要メモ・選択OBJデータ・ビューレイヤー除外状態保存・ラティス管理有効をOFFにします。既存ストックの保存済み付随データは削除しません"
+
+    def execute(self, context):
+        scene = context.scene
+        try:
+            scene.saved_memo_text = ""
+        except Exception:
+            pass
+        try:
+            scene.record_selected_objects = False
+        except Exception:
+            pass
+        try:
+            scene.record_view_layer_exclude_state = False
+        except Exception:
+            pass
+        try:
+            if hasattr(scene, 'mpm_lattice_management_enabled'):
+                scene.mpm_lattice_management_enabled = False
+        except Exception:
+            pass
+        try:
+            from . import lattice_manager
+            lattice_manager.apply_lattice_management_enabled(scene, False)
+        except Exception:
+            pass
+        _tag_redraw_all_areas()
+        self.report({'INFO'}, "付随データ入力状態をリセットしました")
+        return {'FINISHED'}
+
+
 class OBJECT_OT_prev_saved_stock(bpy.types.Operator):
     bl_idname = "camera.prev_saved_stock"
     bl_label = "前のストックへ"
@@ -2059,6 +2096,7 @@ CLASSES = (
     OBJECT_OT_prev_folder_image,
     OBJECT_OT_next_folder_image,
     OBJECT_OT_reload_current_saved_stock,
+    OBJECT_OT_reset_attached_data_input_state,
     OBJECT_OT_prev_saved_stock,
     OBJECT_OT_next_saved_stock,
 )
@@ -2077,6 +2115,9 @@ _KEYMAP_OPERATOR_IDS = {
     "camera.load_background_image",
     "camera.prev_saved_stock",
     "camera.next_saved_stock",
+    "camera.reset_attached_data_input_state",
+    "camera.prev_folder_image",
+    "camera.next_folder_image",
 }
 
 
@@ -2249,11 +2290,17 @@ def _register_addon_keymaps_impl():
         kmi1 = _new_keymap_item_prefer_head(km_view, "camera.recall_position", 'INSERT')
         kmi2 = _new_keymap_item_prefer_head(km_view, "camera.save_position", 'INSERT', ctrl=True)
         kmi3 = _new_keymap_item_prefer_head(km_view, "camera.load_background_image", 'INSERT', ctrl=True, shift=True)
+        kmi4 = _new_keymap_item_prefer_head(km_view, "camera.reset_attached_data_input_state", 'NUMPAD_0', alt=True)
+        kmi5 = _new_keymap_item_prefer_head(km_view, "camera.prev_folder_image", 'LEFT_ARROW', alt=True)
+        kmi6 = _new_keymap_item_prefer_head(km_view, "camera.next_folder_image", 'RIGHT_ARROW', alt=True)
 
         addon_keymaps.extend([
             (km_view, kmi1),
             (km_view, kmi2),
             (km_view, kmi3),
+            (km_view, kmi4),
+            (km_view, kmi5),
+            (km_view, kmi6),
         ])
 
         # Shift+矢印はフレーム移動系の標準キーマップと競合しやすいので、
@@ -2359,5 +2406,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.186
+# Version Footer: 1.188
 # -------------------------------
