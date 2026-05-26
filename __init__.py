@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.184）:
-# - ラティス管理の新規作成時にラティスも同時作成
-# - 登録名とラティスOBJ名の同期に対応
+# 変更点（1.186）:
+# - 付随データ表示の文言と2列幅を調整
+# - 付随データ表示の並びを整理
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 184),
+    "version": (1, 0, 186),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -37,5 +37,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.184
+# Version Footer: 1.186
 # -------------------------------

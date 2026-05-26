@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.184）:
-# - ラティス管理の新規作成時にラティスも同時作成
-# - 登録名とラティスOBJ名の同期に対応
+# 変更点（1.186）:
+# - 付随データ表示の文言と2列幅を調整
+# - 保存データ構造は1.185から変更なし
 
 import bpy
 import os
@@ -33,6 +33,7 @@ from .storage import (
     _get_saved_item_safe,
     _normalize_saved_item,
     _normalize_saved_list,
+    _normalize_view_layer_exclude_state,
     _safe_existing_dirpath,
     _safe_json_path,
     _safe_saved_index,
@@ -50,7 +51,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 184)  # 1.184
+    v = (1, 0, 186)  # 1.186
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -257,6 +258,10 @@ def _apply_saved_camera_data(scene, camera, manager, data) -> None:
         _apply_saved_lattice_state(scene, data if isinstance(data, dict) else {})
     except Exception as e:
         print(f"ラティス状態の適用中にエラーが発生しました: {e}")
+    try:
+        _apply_saved_view_layer_exclude_state(data if isinstance(data, dict) else {})
+    except Exception as e:
+        print(f"ビューレイヤー除外状態の適用中にエラーが発生しました: {e}")
 
 
 def _apply_saved_selected_object_data(data) -> None:
@@ -287,6 +292,101 @@ def _apply_saved_selected_object_data(data) -> None:
         try:
             obj.scale = obj_data.get('scale', list(obj.scale))
         except Exception:
+            pass
+
+
+
+def _iter_layer_collections(layer_collection, path=None):
+    """現在のビューレイヤー内のLayerCollectionを階層パス付きで列挙する。"""
+    if layer_collection is None:
+        return
+    path = list(path or [])
+    try:
+        collection = getattr(layer_collection, "collection", None)
+        name = str(getattr(collection, "name", "") or getattr(layer_collection, "name", "") or "")
+    except Exception:
+        name = str(getattr(layer_collection, "name", "") or "")
+    current_path = path + ([name] if name else [])
+    yield layer_collection, current_path
+    for child in getattr(layer_collection, "children", []) or []:
+        yield from _iter_layer_collections(child, current_path)
+
+
+def _get_current_view_layer_exclude_state() -> dict:
+    """現在アクティブなビューレイヤーのコレクション除外状態を取得する。"""
+    try:
+        view_layer = bpy.context.view_layer
+    except Exception:
+        view_layer = None
+    if view_layer is None:
+        return {"view_layer_name": "", "collections": []}
+    collections = []
+    root = getattr(view_layer, "layer_collection", None)
+    for layer_collection, path in _iter_layer_collections(root):
+        if not path:
+            continue
+        try:
+            collection = getattr(layer_collection, "collection", None)
+            collection_name = str(getattr(collection, "name", "") or path[-1])
+        except Exception:
+            collection_name = str(path[-1])
+        # ルートも記録してよいが、復元時に設定できない場合があるので安全に無視される。
+        collections.append({
+            "path": list(path),
+            "collection_name": collection_name,
+            "exclude": bool(getattr(layer_collection, "exclude", False)),
+        })
+    return {
+        "view_layer_name": str(getattr(view_layer, "name", "") or ""),
+        "collections": collections,
+    }
+
+
+def _find_layer_collection_by_path(root_layer_collection, path) -> object | None:
+    """保存された階層パスから現在のビューレイヤー内LayerCollectionを探す。"""
+    try:
+        target_path = [str(part) for part in path]
+    except Exception:
+        target_path = []
+    if not target_path:
+        return None
+    for layer_collection, current_path in _iter_layer_collections(root_layer_collection):
+        if current_path == target_path:
+            return layer_collection
+    # ルート名が環境差で変わった場合に備え、末尾側一致でも探す。
+    for layer_collection, current_path in _iter_layer_collections(root_layer_collection):
+        if len(current_path) >= len(target_path) and current_path[-len(target_path):] == target_path:
+            return layer_collection
+    return None
+
+
+def _apply_saved_view_layer_exclude_state(data) -> None:
+    """保存されたビューレイヤー除外状態を現在アクティブなビューレイヤーへ適用する。"""
+    if not isinstance(data, dict):
+        return
+    if not bool(data.get("record_view_layer_exclude_state", False)):
+        return
+    state = _normalize_view_layer_exclude_state(data.get("view_layer_exclude_state"))
+    collections = state.get("collections", [])
+    if not collections:
+        return
+    try:
+        view_layer = bpy.context.view_layer
+        root = getattr(view_layer, "layer_collection", None)
+    except Exception:
+        root = None
+    if root is None:
+        return
+    for item in collections:
+        if not isinstance(item, dict):
+            continue
+        layer_collection = _find_layer_collection_by_path(root, item.get("path", []))
+        if layer_collection is None:
+            continue
+        try:
+            layer_collection.exclude = bool(item.get("exclude", False))
+        except Exception:
+            # ルートなど、excludeを書き換えられないものは無視する。
             pass
 
 
@@ -670,6 +770,8 @@ def _build_current_camera_saved_item(scene, camera) -> dict:
         'selected_objects': selected_objects,
         'lattice_enabled': _get_current_lattice_management_enabled(scene),
         'lattice_state': _get_current_lattice_stock_state(scene),
+        'record_view_layer_exclude_state': bool(getattr(scene, 'record_view_layer_exclude_state', False)),
+        'view_layer_exclude_state': _get_current_view_layer_exclude_state() if bool(getattr(scene, 'record_view_layer_exclude_state', False)) else {},
         'created_at': float(time.time()),
     }
 
@@ -1776,6 +1878,11 @@ def register_scene_simple_properties():
         default="",
         options={'TEXTEDIT_UPDATE'}
     )
+    bpy.types.Scene.record_view_layer_exclude_state = bpy.props.BoolProperty(
+        name="ビューレイヤー除外状態を保存",
+        description="ON のとき、現在のビューレイヤーにあるコレクションの除外ON/OFF状態を記録データへ含めます",
+        default=False,
+    )
     bpy.types.Scene.record_selected_objects = bpy.props.BoolProperty(
         name="選択OBJデータ",
         description="ON のとき、選択中OBJの位置・回転・サイズを記録データへ含めます",
@@ -1831,7 +1938,7 @@ def unregister_camera_sync_properties():
         delattr(bpy.types.Camera, "mpm_bg_visible")
 
 def unregister_scene_simple_properties():
-    for attr in ("saved_camera_index", "show_settings", "show_background_section", "show_shortcut_settings_section", "open_output_after_render", "bg_cycle_skip_stocked", "saved_memo_text", "record_selected_objects"):
+    for attr in ("saved_camera_index", "show_settings", "show_background_section", "show_shortcut_settings_section", "open_output_after_render", "bg_cycle_skip_stocked", "saved_memo_text", "record_view_layer_exclude_state", "record_selected_objects"):
         if hasattr(bpy.types.Scene, attr):
             delattr(bpy.types.Scene, attr)
 
@@ -2252,5 +2359,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.184
+# Version Footer: 1.186
 # -------------------------------

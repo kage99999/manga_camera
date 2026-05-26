@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.184）:
-# - ラティス管理の新規作成時にラティスも同時作成
-# - 登録名とラティスOBJ名の同期に対応
+# 変更点（1.186）:
+# - 付随データ表示の角括弧と「有」を削除
+# - 付随データ表示を同幅2列へ整列
 
 import bpy
 
@@ -33,6 +33,15 @@ from .all_object_data import (
 from .xmp_rendering import (
     draw_xmp_rendering_controls,
 )
+
+
+class MPM_OT_additional_data_status_badge(bpy.types.Operator):
+    bl_idname = "camera.additional_data_status_badge"
+    bl_label = "付随データ状態表示"
+    bl_description = "付随データの有無を表示するための押下風ボタンです"
+
+    def execute(self, context):
+        return {'FINISHED'}
 
 
 class MPM_RecordedObjectListItemV130(bpy.types.PropertyGroup):
@@ -350,49 +359,50 @@ def _saved_data_has_lattice_enabled(data):
     return bool(data.get('lattice_enabled', False))
 
 
+def _saved_data_has_view_layer_state(data):
+    if not isinstance(data, dict):
+        return False
+    if not bool(data.get('record_view_layer_exclude_state', False)):
+        return False
+    state = data.get('view_layer_exclude_state', {})
+    if not isinstance(state, dict):
+        return False
+    collections = state.get('collections', [])
+    return isinstance(collections, list) and bool(collections)
+
+
+def _draw_additional_data_status_badge(row, text, enabled):
+    badge_row = row.row(align=True)
+    badge_row.enabled = bool(enabled)
+    try:
+        badge_row.operator("camera.additional_data_status_badge", text=text, depress=bool(enabled))
+    except TypeError:
+        badge_row.operator("camera.additional_data_status_badge", text=text)
+
+
 def _draw_saved_data_status_labels(layout, current_data):
     has_obj = _saved_data_has_recorded_objects(current_data)
     has_memo = _saved_data_has_memo(current_data)
     has_lattice = _saved_data_has_lattice_enabled(current_data)
+    has_view_layer = _saved_data_has_view_layer_state(current_data)
 
     prefix_row = layout.row(align=True)
     prefix_row.alignment = 'LEFT'
     prefix_row.label(text="付随データ：")
 
-    row = layout.row(align=True)
-    row.alignment = 'LEFT'
-    indent = row.row(align=True)
-    indent.ui_units_x = 1.2
-    indent.label(text="")
+    row1 = layout.row(align=True)
+    split1 = row1.split(factor=0.5, align=True)
+    left1 = split1.row(align=True)
+    right1 = split1.row(align=True)
+    _draw_additional_data_status_badge(left1, "OBJデータ", has_obj)
+    _draw_additional_data_status_badge(right1, "ラティス", has_lattice)
 
-    obj_row = row.row(align=True)
-    obj_row.alignment = 'LEFT'
-    obj_row.ui_units_x = 6.0
-    obj_row.enabled = has_obj
-    obj_row.label(text="[OBJデータ有]" if has_obj else "[OBJデータ無]")
-
-    slash_row = row.row(align=True)
-    slash_row.alignment = 'LEFT'
-    slash_row.ui_units_x = 0.6
-    slash_row.label(text="/")
-
-    memo_row = row.row(align=True)
-    memo_row.alignment = 'LEFT'
-    memo_row.ui_units_x = 4.5
-    memo_row.enabled = has_memo
-    memo_row.label(text="[摘要有]" if has_memo else "[摘要無]")
-
-    slash_row2 = row.row(align=True)
-    slash_row2.alignment = 'LEFT'
-    slash_row2.ui_units_x = 0.6
-    slash_row2.label(text="/")
-
-    lattice_row = row.row(align=True)
-    lattice_row.alignment = 'LEFT'
-    lattice_row.ui_units_x = 4.8
-    lattice_row.enabled = has_lattice
-    lattice_row.label(text="[ラティス有]" if has_lattice else "[ラティス無]")
-
+    row2 = layout.row(align=True)
+    split2 = row2.split(factor=0.5, align=True)
+    left2 = split2.row(align=True)
+    right2 = split2.row(align=True)
+    _draw_additional_data_status_badge(left2, "ビューレイヤー状態", has_view_layer)
+    _draw_additional_data_status_badge(right2, "摘要", has_memo)
 
 def _draw_saved_memo_controls(layout, context):
     scene = context.scene
@@ -407,6 +417,7 @@ def _draw_saved_memo_controls(layout, context):
 
     _sync_scene_saved_memo(scene, manager)
     box.prop(scene, 'saved_memo_text', text="摘要メモ")
+    box.prop(scene, 'record_view_layer_exclude_state', text="ビューレイヤー除外状態を保存")
     box.prop(scene, 'record_selected_objects', text="選択OBJデータ")
     if getattr(scene, 'record_selected_objects', False):
         names = []
@@ -1094,6 +1105,7 @@ class VIEW3D_PT_custom_panel_xmp_rendering(bpy.types.Panel):
 
 
 UI_CLASSES = (
+    MPM_OT_additional_data_status_badge,
     MPM_RecordedObjectListItemV130,
     MPM_UL_recorded_object_list_v130,
     MPM_SelectedObjectListItemV131,
@@ -1205,5 +1217,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.184
+# Version Footer: 1.186
 # -------------------------------

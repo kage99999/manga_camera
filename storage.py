@@ -2,6 +2,8 @@
 # ファイル名：storage.py
 # 00漫画用Camera Position Manager
 # 機能：保存データとパス解決の共通処理
+# 変更点（1.186）:
+# - 付随データUI調整に合わせてバージョン更新
 
 import json
 import os
@@ -143,6 +145,65 @@ def _normalize_lattice_state(value, fallback_enabled=False) -> dict:
     return out
 
 
+def _view_layer_exclude_state_signature(value) -> tuple:
+    """ビューレイヤー除外状態を重複判定用の安定したタプルへ変換する。"""
+    if not isinstance(value, dict):
+        return tuple()
+    items = []
+    for item in value.get("collections", []) or []:
+        if not isinstance(item, dict):
+            continue
+        path_value = item.get("path", [])
+        if isinstance(path_value, str):
+            path_tuple = tuple(part for part in path_value.split("/") if part)
+        else:
+            try:
+                path_tuple = tuple(str(part) for part in path_value)
+            except Exception:
+                path_tuple = tuple()
+        items.append((
+            path_tuple,
+            str(item.get("collection_name", "") or ""),
+            bool(item.get("exclude", False)),
+        ))
+    return (
+        str(value.get("view_layer_name", "") or ""),
+        tuple(items),
+    )
+
+
+def _normalize_view_layer_exclude_state(value) -> dict:
+    """保存用ビューレイヤー除外状態を安全な辞書へ正規化する。"""
+    if not isinstance(value, dict):
+        value = {}
+    out = {
+        "view_layer_name": str(value.get("view_layer_name", "") or ""),
+        "collections": [],
+    }
+    for item in value.get("collections", []) or []:
+        if not isinstance(item, dict):
+            continue
+        path_value = item.get("path", [])
+        if isinstance(path_value, str):
+            path_list = [part for part in path_value.split("/") if part]
+        else:
+            try:
+                path_list = [str(part) for part in path_value]
+            except Exception:
+                path_list = []
+        collection_name = str(item.get("collection_name", "") or "")
+        if not path_list and collection_name:
+            path_list = [collection_name]
+        if not path_list:
+            continue
+        out["collections"].append({
+            "path": path_list,
+            "collection_name": collection_name or path_list[-1],
+            "exclude": bool(item.get("exclude", False)),
+        })
+    return out
+
+
 def _stock_signature(item: dict) -> tuple:
     if not isinstance(item, dict):
         return tuple()
@@ -172,6 +233,8 @@ def _stock_signature(item: dict) -> tuple:
         tuple(selected_objects),
         bool(item.get("lattice_enabled", False)),
         _lattice_state_signature(item.get("lattice_state")),
+        bool(item.get("record_view_layer_exclude_state", False)),
+        _view_layer_exclude_state_signature(item.get("view_layer_exclude_state")),
     )
 
 
@@ -213,6 +276,8 @@ def _normalize_saved_item(item) -> dict:
         'selected_objects': [],
         'lattice_enabled': bool(item.get('lattice_enabled', False)),
         'lattice_state': _normalize_lattice_state(item.get('lattice_state'), bool(item.get('lattice_enabled', False))),
+        'record_view_layer_exclude_state': bool(item.get('record_view_layer_exclude_state', False)),
+        'view_layer_exclude_state': _normalize_view_layer_exclude_state(item.get('view_layer_exclude_state')),
     }
     selected_objects = item.get('selected_objects', [])
     if isinstance(selected_objects, list):
