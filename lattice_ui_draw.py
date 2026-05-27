@@ -2,8 +2,9 @@
 # ファイル名：lattice_ui_draw.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション UI描画
-# 変更点（1.175）:
-# - lattice_manager.py からUI描画処理を分離
+# 変更点（1.189）:
+# - 登録セット操作ボタンを2段配置に変更
+# - ラティス適用ボタンを追加
 
 from . import lattice_manager as _lm
 
@@ -53,14 +54,19 @@ def _draw_lattice_set_header(layout, context, lattice_set):
         disabled.enabled = False
         disabled.label(text="未作成")
 
-    button_row = layout.row(align=True)
-    button_row.operator("camera.lattice_add_set", text="＋新規")
-    duplicate = button_row.row(align=True)
-    duplicate.enabled = lattice_set is not None
-    duplicate.operator("camera.lattice_duplicate_set", text="複製")
-    delete = button_row.row(align=True)
+    row1 = layout.row(align=True)
+    row1.operator("camera.lattice_add_set", text="＋新規")
+    delete = row1.row(align=True)
     delete.enabled = lattice_set is not None
     delete.operator("camera.lattice_delete_set", text="削除")
+
+    row2 = layout.row(align=True)
+    duplicate = row2.row(align=True)
+    duplicate.enabled = lattice_set is not None
+    duplicate.operator("camera.lattice_duplicate_set", text="複製")
+    apply = row2.row(align=True)
+    apply.enabled = lattice_set is not None
+    apply.operator("camera.lattice_apply_current_set_and_remove", text="適用")
 
     if lattice_set is None:
         info = layout.box()
@@ -247,5 +253,5 @@ __all__ = ["draw_lattice_manager_panel"]
 
 # -------------------------------
 # ファイル名：lattice_ui_draw.py
-# Version Footer: 1.175
+# Version Footer: 1.189
 # -------------------------------

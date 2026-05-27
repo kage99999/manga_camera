@@ -2,9 +2,9 @@
 # ファイル名：lattice_manager.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション
-# 変更点（1.184）:
-# - 新規セット作成時にラティスOBJも同時作成
-# - 登録名とラティスOBJ名を L_登録名 で同期
+# 変更点（1.189）:
+# - 登録セットのラティス適用後にラティスOBJと登録セットを整理する処理を追加
+# - 適用時にサブディビジョンサーフェスMODを管理外へ外して残す処理を追加
 
 import bpy
 
@@ -1438,6 +1438,81 @@ def _delete_managed_modifiers_for_set(lattice_set):
 
 
 
+def _untag_modifier_from_lattice_manager(modifier):
+    """指定MODをラティス管理の対象外にするため、管理用カスタムプロパティを外す。"""
+    if modifier is None:
+        return False
+    changed = False
+    for key in (
+        "created_by",
+        "set_uid",
+        "modifier_role",
+        LATTICE_GLOBAL_FORCED_KEY,
+        LATTICE_GLOBAL_PREV_VIEWPORT_KEY,
+        LATTICE_GLOBAL_PREV_RENDER_KEY,
+    ):
+        try:
+            if _modifier_custom_delete(modifier, key):
+                changed = True
+        except Exception:
+            pass
+    return changed
+
+
+def _retire_subdivision_modifier_from_lattice_manager(modifier, lattice_set):
+    """サブディビジョンMODを適用せず残し、ラティス管理の対象外名へ変更する。"""
+    if modifier is None or getattr(modifier, "type", "") != 'SUBSURF':
+        return False
+    _untag_modifier_from_lattice_manager(modifier)
+    set_name = _safe_name(getattr(lattice_set, "set_name", "") if lattice_set is not None else "", "登録セット")
+    try:
+        modifier.name = f"サブD_{set_name}"
+    except Exception:
+        pass
+    try:
+        _tag_modifier_owner_for_update(modifier)
+    except Exception:
+        pass
+    return True
+
+
+def _lattice_object_used_by_other_set(scene, current_set, lattice_obj):
+    """指定ラティスOBJが、現在セット以外の登録セットでも使われているか確認する。"""
+    if scene is None or current_set is None or lattice_obj is None:
+        return False
+    sets = _get_lattice_sets(scene)
+    if sets is None:
+        return False
+    current_uid = _ensure_set_uid(current_set)
+    for other_set in sets:
+        if _ensure_set_uid(other_set) == current_uid:
+            continue
+        other_lattice = getattr(other_set, "lattice_obj", None)
+        if other_lattice == lattice_obj:
+            return True
+    return False
+
+
+def _remove_lattice_object_if_unshared(scene, current_set, lattice_obj):
+    """他セットで共有されていない場合だけ、ラティスOBJと未使用データを削除する。"""
+    if lattice_obj is None or getattr(lattice_obj, "type", "") != 'LATTICE':
+        return False, False
+    if _lattice_object_used_by_other_set(scene, current_set, lattice_obj):
+        return False, True
+    lattice_data = getattr(lattice_obj, "data", None)
+    try:
+        bpy.data.objects.remove(lattice_obj, do_unlink=True)
+    except Exception:
+        return False, False
+    try:
+        if lattice_data is not None and getattr(lattice_data, "users", 0) == 0:
+            bpy.data.lattices.remove(lattice_data)
+    except Exception:
+        pass
+    return True, False
+
+
+
 
 def _sync_lattice_selected_object_display_items(context):
     """3Dビューの選択OBJをラティス管理用の表示リストへ同期する。"""
@@ -1521,6 +1596,7 @@ from .lattice_ops import (
     MPM_OT_lattice_cancel_remove_selected_objects,
     MPM_OT_lattice_fit_to_registered_objects,
     MPM_OT_lattice_apply_or_update_modifiers,
+    MPM_OT_lattice_apply_current_set_and_remove,
     MPM_OT_lattice_enable_modifiers,
     MPM_OT_lattice_disable_modifiers,
     MPM_OT_lattice_delete_modifiers,
@@ -1541,6 +1617,7 @@ LATTICE_MANAGER_CLASSES = (
     MPM_OT_lattice_cancel_remove_selected_objects,
     MPM_OT_lattice_fit_to_registered_objects,
     MPM_OT_lattice_apply_or_update_modifiers,
+    MPM_OT_lattice_apply_current_set_and_remove,
     MPM_OT_lattice_enable_modifiers,
     MPM_OT_lattice_disable_modifiers,
     MPM_OT_lattice_delete_modifiers,
@@ -1627,5 +1704,5 @@ def unregister_lattice_manager():
 
 # -------------------------------
 # ファイル名：lattice_manager.py
-# Version Footer: 1.184
+# Version Footer: 1.189
 # -------------------------------

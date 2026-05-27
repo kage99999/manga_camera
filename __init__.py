@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.188）:
-# - Alt + ← / Alt + → で画像送りセクションの前後画像送りを実行するショートカットを追加
-# - 画像送りボタンとショートカットの動作を同じ処理へ統一
+# 変更点（1.189）:
+# - ラティス管理に適用ボタンを追加
+# - ラティス適用後にラティスOBJと登録セットを削除する処理を追加
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 188),
+    "version": (1, 0, 189),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -37,5 +37,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.188
+# Version Footer: 1.189
 # -------------------------------

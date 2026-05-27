@@ -2,8 +2,9 @@
 # ファイル名：lattice_ops.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション オペレーター
-# 変更点（1.184）:
-# - 新規セット作成時にラティスOBJも同時作成
+# 変更点（1.189）:
+# - 登録セットの適用オペレーターを追加
+# - ラティスMODだけを適用し、サブディビジョンMODは適用せず管理外へ残す
 
 import bpy
 from . import lattice_manager as _lm
@@ -45,6 +46,12 @@ _tag_lattice_modifier_for_set = _lm._tag_lattice_modifier_for_set
 _tag_subdivision_modifier_for_set = _lm._tag_subdivision_modifier_for_set
 _unique_set_name = _lm._unique_set_name
 _is_delete_candidate_item = _lm._is_delete_candidate_item
+_collect_managed_subdivision_modifiers_for_set = _lm._collect_managed_subdivision_modifiers_for_set
+_modifier_index = _lm._modifier_index
+_move_modifier_to_index = _lm._move_modifier_to_index
+_remove_lattice_object_if_unshared = _lm._remove_lattice_object_if_unshared
+_retire_subdivision_modifier_from_lattice_manager = _lm._retire_subdivision_modifier_from_lattice_manager
+_tag_modifier_owner_for_update = _lm._tag_modifier_owner_for_update
 
 # =========================
 # オペレーター
@@ -433,6 +440,177 @@ class MPM_OT_lattice_apply_or_update_modifiers(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def _restore_selection_after_lattice_apply(context, previous_active, selected_names):
+    """ラティス適用のために変更した選択状態を、可能な範囲で元に戻す。"""
+    try:
+        for obj in getattr(bpy.data, "objects", []) or []:
+            try:
+                obj.select_set(str(getattr(obj, "name", "") or "") in selected_names)
+            except Exception:
+                pass
+        if previous_active is not None and bpy.data.objects.get(str(getattr(previous_active, "name", "") or "")) is not None:
+            context.view_layer.objects.active = previous_active
+    except Exception:
+        pass
+
+
+def _apply_single_lattice_modifier_preserving_subdivision(context, obj, lattice_set, lattice_modifier):
+    """サブディビジョンMODを一時的に無効化し、ラティスMODだけを適用する。"""
+    if obj is None or lattice_modifier is None:
+        return False, "対象がありません"
+    if getattr(lattice_modifier, "type", "") != 'LATTICE':
+        return False, "対象MODがラティスではありません"
+    subd_mods = list(_collect_managed_subdivision_modifiers_for_set(obj, lattice_set, lattice_modifier))
+    subd_states = []
+    for subd in subd_mods:
+        try:
+            subd_states.append((subd, bool(getattr(subd, "show_viewport", True)), bool(getattr(subd, "show_render", True))))
+            subd.show_viewport = False
+            subd.show_render = False
+        except Exception:
+            pass
+    previous_active = getattr(context.view_layer.objects, "active", None)
+    selected_names = {str(getattr(selected, "name", "") or "") for selected in getattr(context, "selected_objects", []) or [] if selected is not None}
+    previous_hide_viewport = bool(getattr(obj, "hide_viewport", False))
+    previous_hide_set = False
+    try:
+        previous_hide_set = bool(obj.hide_get())
+    except Exception:
+        previous_hide_set = False
+    try:
+        _ensure_object_mode(context)
+        try:
+            obj.hide_viewport = False
+        except Exception:
+            pass
+        try:
+            obj.hide_set(False)
+        except Exception:
+            pass
+        for selected in list(getattr(context, "selected_objects", []) or []):
+            try:
+                selected.select_set(False)
+            except Exception:
+                pass
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        bpy.ops.object.modifier_apply(modifier=str(getattr(lattice_modifier, "name", "") or ""))
+        success = True
+        message = "適用しました"
+    except Exception as exc:
+        success = False
+        message = f"適用失敗: {exc}"
+    finally:
+        for subd, show_viewport, show_render in subd_states:
+            try:
+                subd.show_viewport = show_viewport
+                subd.show_render = show_render
+            except Exception:
+                pass
+        try:
+            obj.hide_viewport = previous_hide_viewport
+        except Exception:
+            pass
+        try:
+            obj.hide_set(previous_hide_set)
+        except Exception:
+            pass
+        _restore_selection_after_lattice_apply(context, previous_active, selected_names)
+    if success:
+        for subd, _show_viewport, _show_render in subd_states:
+            _retire_subdivision_modifier_from_lattice_manager(subd, lattice_set)
+    return success, message
+
+
+def _remove_lattice_set_after_apply(scene, lattice_set):
+    """適用後に現在登録セットを削除し、残ったセットの選択状態とMOD名を整理する。"""
+    sets = _get_lattice_sets(scene)
+    if sets is None or lattice_set is None:
+        return 0
+    target_uid = _ensure_set_uid(lattice_set)
+    removed_index = -1
+    for index, candidate in enumerate(sets):
+        if _ensure_set_uid(candidate) == target_uid:
+            removed_index = index
+            break
+    if removed_index < 0:
+        return 0
+    sets.remove(removed_index)
+    if len(sets) == 0:
+        try:
+            scene.mpm_lattice_active_set_index = -1
+            scene.mpm_lattice_active_set_enum = "__none__"
+        except Exception:
+            pass
+        return 0
+    new_index = max(0, min(removed_index, len(sets) - 1))
+    try:
+        scene.mpm_lattice_active_set_index = new_index
+        scene.mpm_lattice_active_set_enum = _ensure_set_uid(sets[new_index])
+    except Exception:
+        pass
+    return _rename_managed_modifiers_for_all_sets(scene)
+
+
+class MPM_OT_lattice_apply_current_set_and_remove(bpy.types.Operator):
+    bl_idname = "camera.lattice_apply_current_set_and_remove"
+    bl_label = "適用"
+    bl_description = "現在の登録セットのラティスMODだけを適用し、ラティスOBJと登録セットを削除します。サブディビジョンMODは適用せず残します"
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="この登録セットのラティス変形を適用します。")
+        layout.label(text="サブディビジョンサーフェス等の他MODは適用しません。")
+        layout.label(text="適用後、ラティスOBJと登録セットは削除されます。")
+
+    def execute(self, context):
+        scene = context.scene
+        lattice_set = _get_active_lattice_set(scene)
+        if lattice_set is None:
+            self.report({'WARNING'}, "適用する登録セットがありません")
+            return {'CANCELLED'}
+        lattice_obj = getattr(lattice_set, "lattice_obj", None)
+        if lattice_obj is None or getattr(lattice_obj, "type", "") != 'LATTICE':
+            self.report({'WARNING'}, "登録セットにラティスOBJが指定されていません")
+            return {'CANCELLED'}
+        _ensure_set_uid(lattice_set)
+        applied = 0
+        failed = 0
+        retired_subd = 0
+        for obj in list(_iter_registered_existing_objects(lattice_set)):
+            if obj == lattice_obj:
+                continue
+            if not _is_modifier_area_supported(obj):
+                failed += 1
+                continue
+            lattice_mod = _find_managed_lattice_modifier(obj, lattice_set)
+            if lattice_mod is None:
+                continue
+            before_subd = list(_collect_managed_subdivision_modifiers_for_set(obj, lattice_set, lattice_mod))
+            success, _message = _apply_single_lattice_modifier_preserving_subdivision(context, obj, lattice_set, lattice_mod)
+            if success:
+                applied += 1
+                retired_subd += len(before_subd)
+            else:
+                failed += 1
+        lattice_removed, shared_lattice = _remove_lattice_object_if_unshared(scene, lattice_set, lattice_obj)
+        renamed_mods = _remove_lattice_set_after_apply(scene, lattice_set)
+        try:
+            if getattr(context, "view_layer", None) is not None:
+                context.view_layer.update()
+        except Exception:
+            pass
+        if applied == 0:
+            self.report({'WARNING'}, f"ラティスMOD適用は0件です / 登録セット整理済み / ラティス削除:{1 if lattice_removed else 0}")
+            return {'FINISHED'}
+        shared_text = " / ラティス共有のためOBJ削除なし" if shared_lattice else ""
+        self.report({'INFO'}, f"ラティス適用:{applied} 失敗:{failed} サブD管理外:{retired_subd} ラティス削除:{1 if lattice_removed else 0} 名称整理:{renamed_mods}{shared_text}")
+        return {'FINISHED'}
+
+
 class MPM_OT_lattice_enable_modifiers(bpy.types.Operator):
     bl_idname = "camera.lattice_enable_modifiers"
     bl_label = "有効"
@@ -490,6 +668,7 @@ __all__ = [
     "MPM_OT_lattice_cancel_remove_selected_objects",
     "MPM_OT_lattice_fit_to_registered_objects",
     "MPM_OT_lattice_apply_or_update_modifiers",
+    "MPM_OT_lattice_apply_current_set_and_remove",
     "MPM_OT_lattice_enable_modifiers",
     "MPM_OT_lattice_disable_modifiers",
     "MPM_OT_lattice_delete_modifiers",
@@ -497,5 +676,5 @@ __all__ = [
 
 # -------------------------------
 # ファイル名：lattice_ops.py
-# Version Footer: 1.184
+# Version Footer: 1.189
 # -------------------------------
