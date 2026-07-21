@@ -1,12 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：xmp_rendering.py
 # 00漫画用Camera Position Manager
-# 変更点（1.180）:
-# - CompositorのFile Output等で書き出されたPNGへXMPメタデータを後付けするレンダリング機能を追加
-# - XMP対象フォルダをSceneプロパティとして追加
-# - Shift + F12 のショートカットを追加
-# - tiff:Makeを既存のカメラ製造元情報へ戻し、現在フレーム数はexifEX:LensMake（レンズメーカー欄）へ追加
-# - レンダリング開始を完了通知と同じレポート通知位置へ出すため、タイマー経由の実行へ変更
+# 変更点（1.190）:
+# - Shift + F12 を優先登録し、遅延登録に失敗した場合も即時登録するよう修正
 
 import bpy
 import os
@@ -22,7 +18,7 @@ from .core import _get_valid_scene_camera, _register_timer_once
 # =========================
 # 定数
 # =========================
-ADDON_VERSION_STR = "1.180"
+ADDON_VERSION_STR = "1.190"
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _XMP_KEYWORD = "XML:com.adobe.xmp"
 _RENDER_OPERATOR_ID = "camera.render_with_xmp"
@@ -496,6 +492,25 @@ def _refresh_keyconfigs():
         pass
 
 
+def _new_xmp_keymap_item_prefer_head(km):
+    """Blender標準のShift+F12より先にXMPレンダリングを評価させる"""
+    try:
+        return km.keymap_items.new(
+            _RENDER_OPERATOR_ID,
+            type='F12',
+            value='PRESS',
+            shift=True,
+            head=True,
+        )
+    except TypeError:
+        return km.keymap_items.new(
+            _RENDER_OPERATOR_ID,
+            type='F12',
+            value='PRESS',
+            shift=True,
+        )
+
+
 def _register_xmp_keymaps_impl():
     """Shift + F12 を登録する"""
     global _XMP_KEYMAP_REGISTRATION_PENDING
@@ -513,7 +528,7 @@ def _register_xmp_keymaps_impl():
 
     try:
         km = kc.keymaps.new(name="Window", space_type='EMPTY')
-        kmi = km.keymap_items.new(_RENDER_OPERATOR_ID, type='F12', value='PRESS', shift=True)
+        kmi = _new_xmp_keymap_item_prefer_head(km)
         addon_xmp_keymaps.append((km, kmi))
         _refresh_keyconfigs()
     except Exception:
@@ -528,7 +543,10 @@ def _schedule_xmp_keymap_registration():
         return
     _XMP_KEYMAP_REGISTRATION_PENDING = True
     try:
-        _register_timer_once(_register_xmp_keymaps_impl, first_interval=0.0)
+        registered = _register_timer_once(_register_xmp_keymaps_impl, first_interval=0.0)
+        if not registered:
+            _XMP_KEYMAP_REGISTRATION_PENDING = False
+            _register_xmp_keymaps_impl()
     except Exception:
         _XMP_KEYMAP_REGISTRATION_PENDING = False
 
@@ -579,5 +597,5 @@ def unregister_xmp_rendering():
 
 # -------------------------------
 # ファイル名：xmp_rendering.py
-# Version Footer: 1.180
+# Version Footer: 1.190
 # -------------------------------

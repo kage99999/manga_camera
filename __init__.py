@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.189）:
-# - ラティス管理に適用ボタンを追加
-# - ラティス適用後にラティスOBJと登録セットを削除する処理を追加
+# 変更点（1.190）:
+# - XMP付与レンダリングのShift+F12ショートカット登録を安定化
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 189),
+    "version": (1, 0, 190),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -37,5 +36,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.189
+# Version Footer: 1.190
 # -------------------------------
