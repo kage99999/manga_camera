@@ -2,6 +2,8 @@
 # ファイル名：background.py
 # 00漫画用Camera Position Manager
 # 機能：下絵画像と背景表示の共通処理
+# 変更点（1.203）:
+# - 記録済み画像を除外しても現在画像からの送り方向を維持
 
 import os
 import re
@@ -54,23 +56,30 @@ def _natural_sort_key(value: str):
     return [int(part) if part.isdigit() else part.casefold() for part in re.split(r'(\d+)', s)]
 
 
+_FOLDER_IMAGE_CACHE = None
+
+
 def _iter_folder_image_paths(dirpath: str):
+    global _FOLDER_IMAGE_CACHE
     path = _safe_existing_dirpath(dirpath, fallback="")
     if not path or not os.path.isdir(path):
         return []
     exts = {'.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff', '.bmp'}
     items = []
     try:
-        for name in os.listdir(path):
-            full = os.path.join(path, name)
-            if not os.path.isfile(full):
-                continue
-            if os.path.splitext(name)[1].lower() not in exts:
-                continue
-            items.append(full)
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if os.path.splitext(entry.name)[1].lower() in exts and entry.is_file():
+                    items.append(entry.path)
     except Exception:
+        _FOLDER_IMAGE_CACHE = None
         return []
+    # Directory timestamps can lag on Windows. Check names, cache only sorting.
+    key = (os.path.normcase(os.path.abspath(path)), frozenset(items))
+    if _FOLDER_IMAGE_CACHE is not None and _FOLDER_IMAGE_CACHE[0] == key:
+        return _FOLDER_IMAGE_CACHE[1]
     items.sort(key=lambda fp: _natural_sort_key(os.path.basename(fp)))
+    _FOLDER_IMAGE_CACHE = (key, items)
     return items
 
 
@@ -150,15 +159,44 @@ def _apply_background_display_settings(bg, data) -> None:
         pass
 
 
-def _apply_saved_background_to_camera(camera, manager, data) -> None:
+def _capture_background_display_state(camera):
+    """フレーム変更で評価される前の表示設定を退避する。"""
+    camera_data = camera.data
+    if not camera_data.background_images:
+        return None
+    bg = camera_data.background_images[0]
+    return {
+        'bg_opacity': getattr(bg, 'opacity', getattr(bg, 'alpha', 1.0)),
+        'bg_depth': bg.display_depth,
+        'show_background_images': camera_data.show_background_images,
+        'show_background_image': getattr(bg, 'show_background_image', True),
+        'passepartout_alpha': camera_data.passepartout_alpha,
+        'show_passepartout': camera_data.show_passepartout,
+    }
+
+
+def _apply_saved_background_to_camera(camera, manager, data, *, display_state=None) -> None:
+    if display_state is None:
+        display_state = _capture_background_display_state(camera)
     bg = _get_or_create_background_slot(camera)
     if bg is None:
         return
     image_path = _resolve_bg_image_path(manager, data.get('bg_image', ""))
     image = _load_image_safe(image_path) if image_path else None
     bg.image = image
+    if display_state is not None:
+        _apply_background_display_settings(bg, display_state)
+        # Preserve the camera/slot switches separately, including other slots.
+        camera.data.show_background_images = display_state['show_background_images']
+        if hasattr(bg, 'show_background_image'):
+            bg.show_background_image = display_state['show_background_image']
+        camera.data.passepartout_alpha = display_state['passepartout_alpha']
+        camera.data.show_passepartout = display_state['show_passepartout']
+        return
     _apply_background_display_settings(bg, data if isinstance(data, dict) else {})
-    _set_background_visibility(camera, bg, bool(image is not None or data.get('bg_image', '') not in ('', 'No File')))
+    default_visible = bool(image is not None or data.get('bg_image', '') not in ('', 'No File'))
+    visible = bool(_saved_value(data, 'bg_visible', default_visible))
+    _set_background_visibility(camera, bg, visible)
 
 
 def _set_background_image_from_path(scene, camera, manager, filepath: str, redraw_callback, update_resolution: bool = False, update_frame: bool = False):
@@ -190,11 +228,9 @@ def _set_background_image_from_path(scene, camera, manager, filepath: str, redra
                 scene.frame_set(int(fnum))
         except Exception:
             pass
-    manager.background_image_folder_path = _safe_existing_dirpath(os.path.dirname(filepath), fallback=manager.background_image_folder_path)
-    try:
-        manager.save_data()
-    except Exception:
-        pass
+    folder = _safe_existing_dirpath(os.path.dirname(filepath), fallback=manager.background_image_folder_path)
+    if folder != manager.background_image_folder_path:
+        manager.save_data(background_image_folder_path=folder)
     redraw_callback()
     return image
 
@@ -203,15 +239,20 @@ def _find_next_folder_image_path(manager, current_name: str = '', step: int = 1,
     paths = _iter_folder_image_paths(getattr(manager, 'background_image_folder_path', ''))
     if not paths:
         return '', 0
-    if skip_stocked:
-        stocked = _stocked_bg_name_set(manager)
-        paths = [p for p in paths if unicodedata.normalize('NFC', os.path.basename(p)).casefold() not in stocked]
-        if not paths:
-            return '', 0
     names = [unicodedata.normalize('NFC', os.path.basename(p)) for p in paths]
+    stocked = _stocked_bg_name_set(manager) if skip_stocked else set()
+    eligible = [name.casefold() not in stocked for name in names]
+    count = sum(eligible)
+    if not count:
+        return '', 0
     cur = unicodedata.normalize('NFC', str(current_name or ''))
     if cur in names:
         idx = names.index(cur)
-        next_idx = (idx + (1 if step >= 0 else -1)) % len(paths)
-        return paths[next_idx], len(paths)
-    return paths[0], len(paths)
+        direction = 1 if step >= 0 else -1
+        candidates = ((idx + direction * offset) % len(paths) for offset in range(1, len(paths) + 1))
+    else:
+        candidates = range(len(paths))
+    for index in candidates:
+        if eligible[index]:
+            return paths[index], count
+    return '', 0

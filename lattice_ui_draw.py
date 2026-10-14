@@ -2,9 +2,9 @@
 # ファイル名：lattice_ui_draw.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション UI描画
-# 変更点（1.189）:
-# - 登録セット操作ボタンを2段配置に変更
-# - ラティス適用ボタンを追加
+# 変更点（1.203）:
+# - バージョン表記同期
+# - 描画中のモディファイア変更とビューレイヤー更新を除去
 
 from . import lattice_manager as _lm
 
@@ -146,7 +146,6 @@ def _draw_modifier_management_panel(layout, context, lattice_set):
     lattice_obj = getattr(lattice_set, "lattice_obj", None) if lattice_set is not None else None
     registered_count = len(lattice_set.objects) if lattice_set is not None else 0
     valid_count = _valid_registered_object_count(lattice_set) if lattice_set is not None else 0
-    managed_count = _count_any_managed_modifiers_for_set(lattice_set) if lattice_set is not None else 0
     mod_name = _modifier_name_for_set(lattice_set) if lattice_set is not None else "未作成"
 
     if lattice_obj is not None:
@@ -229,13 +228,6 @@ def draw_lattice_manager_panel(layout, context):
     multi_row = layout.row(align=True)
     multi_row.enabled = management_enabled
     multi_row.prop(scene, "mpm_lattice_multi_set_enabled", text="複数登録セット使用")
-    try:
-        if management_enabled:
-            apply_lattice_set_activation_state(scene)
-        else:
-            apply_lattice_management_enabled(scene, False)
-    except Exception:
-        pass
     _ensure_active_lattice_index(scene)
     lattice_set = _get_active_lattice_set(scene)
     body = layout.column(align=True)
@@ -253,5 +245,5 @@ __all__ = ["draw_lattice_manager_panel"]
 
 # -------------------------------
 # ファイル名：lattice_ui_draw.py
-# Version Footer: 1.189
+# Version Footer: 1.203
 # -------------------------------

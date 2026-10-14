@@ -2,9 +2,9 @@
 # ファイル名：lattice_ops.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション オペレーター
-# 変更点（1.189）:
-# - 登録セットの適用オペレーターを追加
-# - ラティスMODだけを適用し、サブディビジョンMODは適用せず管理外へ残す
+# 変更点（1.203）:
+# - バージョン表記同期
+# - 適用不可条件を事前検査し、途中失敗時もラティスと登録セットを保持
 
 import bpy
 from . import lattice_manager as _lm
@@ -494,7 +494,10 @@ def _apply_single_lattice_modifier_preserving_subdivision(context, obj, lattice_
                 pass
         obj.select_set(True)
         context.view_layer.objects.active = obj
-        bpy.ops.object.modifier_apply(modifier=str(getattr(lattice_modifier, "name", "") or ""))
+        modifier_name = str(lattice_modifier.name)
+        result = bpy.ops.object.modifier_apply(modifier=modifier_name)
+        if 'FINISHED' not in result or obj.modifiers.get(modifier_name) is not None:
+            raise RuntimeError("モディファイアが適用されませんでした")
         success = True
         message = "適用しました"
     except Exception as exc:
@@ -555,6 +558,7 @@ def _remove_lattice_set_after_apply(scene, lattice_set):
 class MPM_OT_lattice_apply_current_set_and_remove(bpy.types.Operator):
     bl_idname = "camera.lattice_apply_current_set_and_remove"
     bl_label = "適用"
+    bl_options = {'REGISTER', 'UNDO'}
     bl_description = "現在の登録セットのラティスMODだけを適用し、ラティスOBJと登録セットを削除します。サブディビジョンMODは適用せず残します"
 
     def invoke(self, context, event):
@@ -577,10 +581,27 @@ class MPM_OT_lattice_apply_current_set_and_remove(bpy.types.Operator):
             self.report({'WARNING'}, "登録セットにラティスOBJが指定されていません")
             return {'CANCELLED'}
         _ensure_set_uid(lattice_set)
+        targets = []
+        for obj in _iter_registered_existing_objects(lattice_set):
+            mod = _find_managed_lattice_modifier(obj, lattice_set)
+            if obj == lattice_obj or mod is None:
+                continue
+            data = getattr(obj, 'data', None)
+            if (not getattr(obj, 'is_editable', True)
+                    or (data is not None and not getattr(data, 'is_editable', True))
+                    or getattr(data, 'shape_keys', None) is not None
+                    or (data is not None and data.users > 1)
+                    or context.view_layer.objects.get(obj.name) != obj):
+                self.report({'WARNING'}, f"適用できないOBJがあります: {obj.name}。シェイプキー・共有データ・編集可否・ビューレイヤーを確認してください。セットは保持しました")
+                return {'CANCELLED'}
+            targets.append(obj)
+        if not targets:
+            self.report({'WARNING'}, "適用できるラティスMODがありません。登録セットとラティスは保持しました")
+            return {'CANCELLED'}
         applied = 0
         failed = 0
         retired_subd = 0
-        for obj in list(_iter_registered_existing_objects(lattice_set)):
+        for obj in targets:
             if obj == lattice_obj:
                 continue
             if not _is_modifier_area_supported(obj):
@@ -596,6 +617,9 @@ class MPM_OT_lattice_apply_current_set_and_remove(bpy.types.Operator):
                 retired_subd += len(before_subd)
             else:
                 failed += 1
+        if failed:
+            self.report({'WARNING'}, f"ラティス適用:{applied} 失敗:{failed}。登録セットとラティスは保持しました")
+            return {'FINISHED'} if applied else {'CANCELLED'}
         lattice_removed, shared_lattice = _remove_lattice_object_if_unshared(scene, lattice_set, lattice_obj)
         renamed_mods = _remove_lattice_set_after_apply(scene, lattice_set)
         try:
@@ -676,5 +700,5 @@ __all__ = [
 
 # -------------------------------
 # ファイル名：lattice_ops.py
-# Version Footer: 1.189
+# Version Footer: 1.203
 # -------------------------------

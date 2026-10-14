@@ -1,28 +1,34 @@
 # -*- coding: utf-8 -*-
 # ファイル名：xmp_rendering.py
 # 00漫画用Camera Position Manager
-# 変更点（1.190）:
-# - Shift + F12 を優先登録し、遅延登録に失敗した場合も即時登録するよう修正
+# 変更点（1.203）:
+# - Quaternion/Axis Angleカメラの有効な回転値をXMPへ反映
 
 import bpy
+from bpy.app.handlers import persistent
 import os
 import time
 import zlib
 import re
 from html import escape
 from pathlib import Path
+from mathutils import Quaternion, Vector
 
-from .core import _get_valid_scene_camera, _register_timer_once
+from .core import (
+    _get_valid_scene_camera, _register_timer_once, _unregister_timer,
+    get_camera_data_manager,
+)
+from .storage import _atomic_writer
 
 
 # =========================
 # 定数
 # =========================
-ADDON_VERSION_STR = "1.190"
+ADDON_VERSION_STR = "1.203"
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _XMP_KEYWORD = "XML:com.adobe.xmp"
 _RENDER_OPERATOR_ID = "camera.render_with_xmp"
-_MISSING_TARGET_MESSAGE = "対象ファイルが見つかりません。フォルダパスがあってるか、コンポジターの指定で######がついているか確認して下さい。"
+_MISSING_TARGET_MESSAGE = "対象PNGが見つかりません。設定の出力フォルダとコンポジットの出力先が同じか、ファイル名に現在フレーム番号（######）が付いているか確認して下さい。"
 
 addon_xmp_keymaps = []
 _XMP_KEYMAP_REGISTRATION_PENDING = False
@@ -54,7 +60,15 @@ def _camera_metadata_values(camera, scene=None):
 
     rotation_values = []
     try:
-        for value in list(camera.rotation_euler)[:3]:
+        mode = camera.rotation_mode
+        if mode == 'QUATERNION':
+            rotation = camera.rotation_quaternion.to_euler('XYZ')
+        elif mode == 'AXIS_ANGLE':
+            angle, *axis = camera.rotation_axis_angle
+            rotation = Quaternion(Vector(axis), angle).to_euler('XYZ')
+        else:
+            rotation = camera.rotation_euler
+        for value in rotation:
             rotation_values.append(float(value) * 180.0 / 3.141592653589793)
     except Exception:
         rotation_values = [0.0, 0.0, 0.0]
@@ -189,7 +203,7 @@ def _write_xmp_to_png(png_path, xmp_packet):
         rebuilt_chunks.append(_make_png_itxt_chunk(_XMP_KEYWORD, xmp_packet))
         rebuilt_chunks.append(_make_png_chunk(b"IEND", b""))
 
-    with open(png_path, "wb") as handle:
+    with _atomic_writer(png_path) as handle:
         handle.write(signature)
         for chunk_bytes in rebuilt_chunks:
             handle.write(chunk_bytes)
@@ -207,6 +221,11 @@ def _resolve_target_folder(folder_text):
         return bpy.path.abspath(raw)
     except Exception:
         return raw
+
+
+def _get_xmp_output_folder():
+    """設定の出力フォルダを参照し、旧XMP専用設定は使用しない。"""
+    return _resolve_target_folder(get_camera_data_manager().output_folder_path)
 
 
 def _filename_contains_current_frame(filename, frame_number):
@@ -257,17 +276,13 @@ def _iter_recent_frame_pngs(target_folder, frame_number, start_time):
 # =========================
 def draw_xmp_rendering_controls(layout, context):
     """XMP付与レンダリングセクションを描画する"""
-    scene = context.scene
-    target_folder = str(getattr(scene, "mpm_xmp_target_folder", "") or "")
+    target_folder = _get_xmp_output_folder()
 
     folder_box = layout.box()
-    folder_box.label(text="XMP対象フォルダ")
-    folder_row = folder_box.row(align=True)
-    folder_row.operator("camera.set_xmp_target_folder", text="フォルダを指定", icon='FILE_FOLDER')
-    folder_row.operator("camera.clear_xmp_target_folder", text="", icon='X')
+    folder_box.label(text="出力フォルダ（設定と共通）")
     current_row = folder_box.row()
     current_row.enabled = False
-    current_row.label(text=target_folder if target_folder else "未設定：XMP付与せず通常レンダリング")
+    current_row.label(text=target_folder if target_folder else "未設定：設定から出力フォルダを指定して下さい")
 
     row = layout.row()
     row.scale_y = 2.0
@@ -315,49 +330,10 @@ def _clear_status_text(context):
 # =========================
 # オペレーター
 # =========================
-class OBJECT_OT_set_xmp_target_folder(bpy.types.Operator):
-    bl_idname = "camera.set_xmp_target_folder"
-    bl_label = "XMP対象フォルダを指定"
-    bl_description = "XMPメタデータを付与するPNGを探す対象フォルダを指定します"
-
-    directory: bpy.props.StringProperty(
-        name="XMP対象フォルダ",
-        description="XMPメタデータを付与するPNGを探す対象フォルダ",
-        default="",
-        subtype='DIR_PATH',
-    )
-
-    def invoke(self, context, event):
-        current = str(getattr(context.scene, "mpm_xmp_target_folder", "") or "")
-        if current:
-            try:
-                self.directory = bpy.path.abspath(current)
-            except Exception:
-                self.directory = current
-        context.window_manager.fileselect_add(self)
-        return {'RUNNING_MODAL'}
-
-    def execute(self, context):
-        context.scene.mpm_xmp_target_folder = str(self.directory or "")
-        self.report({'INFO'}, "XMP対象フォルダを設定しました")
-        return {'FINISHED'}
-
-
-class OBJECT_OT_clear_xmp_target_folder(bpy.types.Operator):
-    bl_idname = "camera.clear_xmp_target_folder"
-    bl_label = "XMP対象フォルダをクリア"
-    bl_description = "XMP対象フォルダを空白に戻します。空白の場合はレンダリングのみ行い、XMP付与は行いません"
-
-    def execute(self, context):
-        context.scene.mpm_xmp_target_folder = ""
-        self.report({'INFO'}, "XMP対象フォルダをクリアしました")
-        return {'FINISHED'}
-
-
 class OBJECT_OT_render_with_xmp(bpy.types.Operator):
     bl_idname = _RENDER_OPERATOR_ID
     bl_label = "XMP付与レンダリング"
-    bl_description = "通常通りレンダリングし、指定フォルダ内の現在フレームPNGへXMPメタデータを付与します"
+    bl_description = "通常通りレンダリングし、設定の出力フォルダ内の現在フレームPNGへXMPメタデータを付与します"
 
     _timer = None
     _is_running = False
@@ -382,8 +358,7 @@ class OBJECT_OT_render_with_xmp(bpy.types.Operator):
 
         render_start_time = time.time()
         frame_number = int(getattr(scene, "frame_current", 0) or 0)
-        target_folder_text = str(getattr(scene, "mpm_xmp_target_folder", "") or "").strip()
-        target_folder = _resolve_target_folder(target_folder_text)
+        target_folder = _get_xmp_output_folder()
         location_text, rotation_text, focal_35mm, xmp_frame_number = _camera_metadata_values(camera, scene)
 
         try:
@@ -398,9 +373,9 @@ class OBJECT_OT_render_with_xmp(bpy.types.Operator):
             self.report({'WARNING'}, "レンダリングが完了しませんでした")
             return {'CANCELLED'}
 
-        if not target_folder_text:
+        if not target_folder:
             _clear_status_text(context)
-            self.report({'INFO'}, "レンダリング完了：XMP対象フォルダ未設定のため、XMP付与は行いませんでした")
+            self.report({'WARNING'}, "レンダリング完了：出力フォルダ未設定のためXMP付与を行いませんでした。設定から出力フォルダを指定して下さい。")
             return {'FINISHED'}
 
         targets = _iter_recent_frame_pngs(target_folder, frame_number, render_start_time)
@@ -555,27 +530,31 @@ def _schedule_xmp_keymap_registration():
 # 登録 / 解除
 # =========================
 CLASSES = (
-    OBJECT_OT_set_xmp_target_folder,
-    OBJECT_OT_clear_xmp_target_folder,
     OBJECT_OT_render_with_xmp,
 )
+
+
+@persistent
+def _on_xmp_file_load(_dummy):
+    global _XMP_KEYMAP_REGISTRATION_PENDING
+    _XMP_KEYMAP_REGISTRATION_PENDING = False
+    _schedule_xmp_keymap_registration()
 
 
 def register_xmp_rendering():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.mpm_xmp_target_folder = bpy.props.StringProperty(
-        name="XMP対象フォルダ",
-        description="XMPメタデータを付与するPNGを探すフォルダ。空白の場合はレンダリングのみ行い、XMP付与は行いません",
-        default="",
-        subtype='DIR_PATH',
-    )
     _schedule_xmp_keymap_registration()
+    if _on_xmp_file_load not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_on_xmp_file_load)
 
 
 def unregister_xmp_rendering():
     global _XMP_KEYMAP_REGISTRATION_PENDING
     _XMP_KEYMAP_REGISTRATION_PENDING = False
+    _unregister_timer(_register_xmp_keymaps_impl)
+    if _on_xmp_file_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_on_xmp_file_load)
     _clear_tracked_xmp_keymaps()
     try:
         wm = bpy.context.window_manager
@@ -583,11 +562,6 @@ def unregister_xmp_rendering():
     except Exception:
         kc = None
     _remove_duplicate_xmp_keymaps(kc)
-    if hasattr(bpy.types.Scene, "mpm_xmp_target_folder"):
-        try:
-            del bpy.types.Scene.mpm_xmp_target_folder
-        except Exception:
-            pass
     for cls in reversed(CLASSES):
         try:
             bpy.utils.unregister_class(cls)
@@ -597,5 +571,5 @@ def unregister_xmp_rendering():
 
 # -------------------------------
 # ファイル名：xmp_rendering.py
-# Version Footer: 1.190
+# Version Footer: 1.203
 # -------------------------------

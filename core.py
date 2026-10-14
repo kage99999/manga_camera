@@ -1,21 +1,29 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.190）:
-# - XMP付与レンダリングのShift+F12ショートカット登録を安定化
+# 変更点（1.203）:
+# - JSON読込の失敗時保護とストック再適用の重複解消
 
 import bpy
 import os
 import sys
-import json
 import time
 import subprocess
 import unicodedata
 from bpy.app.handlers import persistent
+from .transforms import capture_rotation, apply_rotation, rotation_signature
+from .pose_stock import (
+    apply_pose_record,
+    capture_object_record,
+    current_pose_records,
+    recording_objects,
+    stock_pose_signature,
+)
 
 from .background import (
     _apply_background_display_settings,
     _apply_saved_background_to_camera,
+    _capture_background_display_state,
     _find_next_folder_image_path,
     _frame_from_filename_path,
     _get_or_create_background_slot,
@@ -26,6 +34,7 @@ from .background import (
 from .storage import (
     _ENUM_CACHE,
     _append_unique_saved_items,
+    _check_stock_save_target,
     _default_json_dialog_filepath,
     _ensure_manager_saved_data_normalized,
     _find_matching_saved_item_index,
@@ -33,11 +42,15 @@ from .storage import (
     _normalize_saved_item,
     _normalize_saved_list,
     _normalize_view_layer_exclude_state,
+    _load_initial_stock_data,
+    _read_stock_json,
+    _resolve_bg_image_path,
     _safe_existing_dirpath,
     _safe_json_path,
     _safe_saved_index,
     _saved_value,
     _set_saved_camera_index_safe as _storage_set_saved_camera_index_safe,
+    _stock_signature,
     _sync_scene_saved_memo,
     _write_json_atomic,
     ensure_valid_saved_enum,
@@ -50,7 +63,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 190)  # 1.190
+    v = (1, 0, 203)  # 1.203
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -65,6 +78,8 @@ PANEL_LABEL = f"カメラコントロール Ver.{ADDON_VERSION_STR}"
 ADDON_PACKAGE_NAME = (__package__ or __name__.split(".")[0])
 _CAMERA_DATA_MANAGER = None
 _POSTLOAD_FIX_PENDING = False
+_REGISTERED_TIMERS = set()
+_SAVED_STOCK_APPLY_SUSPENDED = False
 
 
 # =========================
@@ -85,11 +100,24 @@ def _register_timer_once(func, first_interval: float = 0.0) -> bool:
     if _is_timer_registered(func):
         return False
     try:
+        _REGISTERED_TIMERS.intersection_update(
+            {timer for timer in _REGISTERED_TIMERS if _is_timer_registered(timer)})
         bpy.app.timers.register(func, first_interval=first_interval)
+        _REGISTERED_TIMERS.add(func)
         return True
     except Exception:
         return False
 
+
+def _unregister_timer(func):
+    if _is_timer_registered(func):
+        bpy.app.timers.unregister(func)
+    _REGISTERED_TIMERS.discard(func)
+
+
+def _unregister_all_timers():
+    for func in tuple(_REGISTERED_TIMERS):
+        _unregister_timer(func)
 
 
 
@@ -207,9 +235,39 @@ def _sanitize_view3d_local_cameras(context, camera=None) -> None:
                     _sanitize_view3d_local_camera(space, safe_camera)
 
 
-def _set_saved_camera_index_safe(scene, manager, index: int | None = 0) -> None:
+def _set_saved_camera_index_safe(scene, manager, index: int | None = 0, *, apply_saved_data=True) -> None:
     """保存ストックのEnum値を安全に更新し、必要な再描画を行う"""
-    _storage_set_saved_camera_index_safe(scene, manager, _tag_redraw_all_areas, index)
+    global _SAVED_STOCK_APPLY_SUSPENDED
+    previous = _SAVED_STOCK_APPLY_SUSPENDED
+    _SAVED_STOCK_APPLY_SUSPENDED = previous or not apply_saved_data
+    try:
+        _storage_set_saved_camera_index_safe(scene, manager, _tag_redraw_all_areas, index)
+    finally:
+        _SAVED_STOCK_APPLY_SUSPENDED = previous
+
+
+def _focus_timeline_on_current_frame(scene) -> None:
+    """同じシーンのタイムラインだけを、倍率を変えず現在フレームへ移動する。"""
+    if bpy.app.background:
+        return
+    context = bpy.context
+    wm = getattr(context, 'window_manager', None)
+    for window in getattr(wm, 'windows', ()):
+        if window.scene != scene:
+            continue
+        for area in window.screen.areas:
+            if area.type != 'DOPESHEET_EDITOR' or area.spaces.active.mode != 'TIMELINE':
+                continue
+            region = next((region for region in area.regions if region.type == 'WINDOW'), None)
+            if region is None or region.width <= 1 or region.height <= 1:
+                continue
+            try:
+                with context.temp_override(window=window, area=area, region=region):
+                    if bpy.ops.action.view_frame.poll():
+                        bpy.ops.action.view_frame()
+                area.tag_redraw()
+            except (RuntimeError, ReferenceError) as exc:
+                print(f"タイムラインの表示位置を更新できませんでした: {exc}")
 
 
 def _apply_saved_camera_data(scene, camera, manager, data) -> None:
@@ -217,6 +275,7 @@ def _apply_saved_camera_data(scene, camera, manager, data) -> None:
     if not scene or not _is_valid_camera_object(camera):
         return
 
+    display_state = _capture_background_display_state(camera)
     fr = _saved_value(data, 'frame_current', None)
     if fr is not None:
         try:
@@ -229,7 +288,7 @@ def _apply_saved_camera_data(scene, camera, manager, data) -> None:
     except Exception:
         pass
     try:
-        camera.rotation_euler = _saved_value(data, 'rotation', list(camera.rotation_euler))
+        apply_rotation(camera, data)
     except Exception:
         pass
     try:
@@ -246,11 +305,14 @@ def _apply_saved_camera_data(scene, camera, manager, data) -> None:
         pass
 
     try:
-        _apply_saved_background_to_camera(camera, manager, data if isinstance(data, dict) else {})
+        _apply_saved_background_to_camera(
+            camera, manager, data if isinstance(data, dict) else {}, display_state=display_state)
     except Exception as e:
         print(f"下絵の読み込み中にエラーが発生しました: {e}")
     try:
-        _apply_saved_selected_object_data(data if isinstance(data, dict) else {})
+        _apply_saved_selected_object_data(
+            data if isinstance(data, dict) else {},
+            prefer_keyframes=scene.mpm_pose_keyframe_priority)
     except Exception as e:
         print(f"選択OBJデータの適用中にエラーが発生しました: {e}")
     try:
@@ -261,9 +323,11 @@ def _apply_saved_camera_data(scene, camera, manager, data) -> None:
         _apply_saved_view_layer_exclude_state(data if isinstance(data, dict) else {})
     except Exception as e:
         print(f"ビューレイヤー除外状態の適用中にエラーが発生しました: {e}")
+    if fr is not None:
+        _focus_timeline_on_current_frame(scene)
 
 
-def _apply_saved_selected_object_data(data) -> None:
+def _apply_saved_selected_object_data(data, *, prefer_keyframes=True) -> None:
     if not isinstance(data, dict):
         return
     if not bool(data.get('record_selected_objects', False)):
@@ -285,13 +349,14 @@ def _apply_saved_selected_object_data(data) -> None:
         except Exception:
             pass
         try:
-            obj.rotation_euler = obj_data.get('rotation', list(obj.rotation_euler))
+            apply_rotation(obj, obj_data)
         except Exception:
             pass
         try:
             obj.scale = obj_data.get('scale', list(obj.scale))
         except Exception:
             pass
+        apply_pose_record(obj, obj_data, prefer_keyframes=prefer_keyframes)
 
 
 
@@ -549,51 +614,43 @@ class CameraDataManager:
         self.background_image_folder_path = _safe_existing_dirpath(home_dir, fallback=home_dir)
         self.save_file_path = _safe_json_path(os.path.join(bpy.utils.user_resource('CONFIG'), "camera_positions.json"))
 
-    def save_data(self, filepath=None):
+    def save_data(self, filepath=None, *, camera_data=None, output_folder_path=None,
+                  background_image_folder_path=None):
         target_path = _safe_json_path(filepath or self.save_file_path)
-        self.save_file_path = target_path
+        _check_stock_save_target(self, target_path, filepath)
         home_dir = os.path.expanduser("~")
-        self.saved_camera_data = _normalize_saved_list(self.saved_camera_data)
-        self.output_folder_path = _safe_existing_dirpath(self.output_folder_path, fallback=home_dir)
-        self.background_image_folder_path = _safe_existing_dirpath(self.background_image_folder_path, fallback=home_dir)
         data = {
-            'camera_data': self.saved_camera_data,
-            'output_folder_path': self.output_folder_path,
-            'background_image_folder_path': self.background_image_folder_path
+            'camera_data': _normalize_saved_list(self.saved_camera_data if camera_data is None else camera_data),
+            'output_folder_path': _safe_existing_dirpath(self.output_folder_path if output_folder_path is None else output_folder_path, fallback=home_dir),
+            'background_image_folder_path': _safe_existing_dirpath(self.background_image_folder_path if background_image_folder_path is None else background_image_folder_path, fallback=home_dir),
         }
-        try:
-            _write_json_atomic(target_path, data)
-        except Exception as e:
-            print(f"データの保存中にエラー: {e}")
-            self.report_error(f"データの保存中にエラーが発生しました: {e}")
-
-    def load_data(self, filepath=None):
-        target_path = _safe_json_path(filepath or self.save_file_path)
+        _write_json_atomic(target_path, data)
+        self.saved_camera_data = data['camera_data']
+        self._normalized_saved_data = self.saved_camera_data
+        self.output_folder_path = data['output_folder_path']
+        self.background_image_folder_path = data['background_image_folder_path']
         self.save_file_path = target_path
+        self._blocked_save_path = None
+
+    def load_data(self, filepath=None, *, create_if_missing=False):
+        target_path = _safe_json_path(filepath or self.save_file_path)
         home_dir = os.path.expanduser("~")
-        if os.path.exists(target_path):
-            try:
-                with open(target_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    if isinstance(data, dict):
-                        self.saved_camera_data = _normalize_saved_list(data.get('camera_data', []))
-                        self.output_folder_path = _safe_existing_dirpath(data.get('output_folder_path', home_dir), fallback=home_dir)
-                        self.background_image_folder_path = _safe_existing_dirpath(data.get('background_image_folder_path', home_dir), fallback=home_dir)
-                    else:
-                        self.saved_camera_data = []
-                        self.output_folder_path = _safe_existing_dirpath(home_dir, fallback=home_dir)
-                        self.background_image_folder_path = _safe_existing_dirpath(home_dir, fallback=home_dir)
-            except json.JSONDecodeError:
-                self.saved_camera_data = []
-                self.output_folder_path = _safe_existing_dirpath(home_dir, fallback=home_dir)
-                self.background_image_folder_path = _safe_existing_dirpath(home_dir, fallback=home_dir)
-                print("設定ファイルが壊れています。初期化しました。")
-            except Exception as e:
-                print(f"読み込み中に予期しないエラー: {e}")
-                self.report_error(f"データの読み込み中にエラーが発生しました: {e}")
-        else:
-            print("設定ファイルが見つかりません。新規作成します。")
+        try:
+            data = _read_stock_json(target_path, 'camera_data')
+        except FileNotFoundError:
+            if not create_if_missing:
+                raise
             self.save_data(target_path)
+            return
+        items = _normalize_saved_list(data['camera_data'])
+        output_folder = _safe_existing_dirpath(data.get('output_folder_path', home_dir), fallback=home_dir)
+        background_folder = _safe_existing_dirpath(data.get('background_image_folder_path', home_dir), fallback=home_dir)
+        self.saved_camera_data = items
+        self._normalized_saved_data = items
+        self.output_folder_path = output_folder
+        self.background_image_folder_path = background_folder
+        self.save_file_path = target_path
+        self._blocked_save_path = None
 
     def report_error(self, message):
         def draw(self, context):
@@ -686,8 +743,9 @@ class OBJECT_OT_recall_camera_position(bpy.types.Operator):
         try:
             manager.load_data()
             rebuild_enum_cache(manager)
-        except Exception:
-            pass
+        except Exception as exc:
+            self.report({'ERROR'}, f"ストックデータを読込できませんでした: {exc}")
+            return {'CANCELLED'}
         saved_items = _ensure_manager_saved_data_normalized(manager)
         if not saved_items:
             self.report({'WARNING'}, "ストックがありません")
@@ -697,7 +755,7 @@ class OBJECT_OT_recall_camera_position(bpy.types.Operator):
         _apply_saved_camera_data(scene, camera, manager, data)
         # UIのプルダウンも最新ストック位置へ合わせる
         try:
-            _set_saved_camera_index_safe(scene, manager, latest_index)
+            _set_saved_camera_index_safe(scene, manager, latest_index, apply_saved_data=False)
         except Exception:
             pass
         _sanitize_view3d_local_cameras(context, camera)
@@ -733,39 +791,57 @@ def _get_current_lattice_stock_state(scene) -> dict:
         return {'lattice_enabled': _get_current_lattice_management_enabled(scene)}
 
 
+def _get_current_background_visible(camera, bg=None) -> bool:
+    data = getattr(camera, "data", None)
+    if data is None:
+        return True
+    try:
+        if hasattr(data, "mpm_bg_visible"):
+            return bool(data.mpm_bg_visible)
+    except Exception:
+        pass
+    try:
+        enabled = bool(getattr(data, "show_background_images", True))
+    except Exception:
+        enabled = True
+    if bg is not None:
+        try:
+            if hasattr(bg, "show_background_image"):
+                return bool(enabled and bg.show_background_image)
+        except Exception:
+            pass
+    return bool(enabled)
+
+
 def _build_current_camera_saved_item(scene, camera) -> dict:
     bg_image = "No File"
     bg_opacity = 1.0
     bg_depth = 'BACK'
+    bg_visible = _get_current_background_visible(camera, None)
     if camera.data.background_images:
         for bg in camera.data.background_images:
             if bg.image:
                 bg_image = safe_basename(bg.image.filepath)
                 bg_opacity = getattr(bg, "opacity", getattr(bg, "alpha", 1.0))
                 bg_depth = bg.display_depth
+                bg_visible = _get_current_background_visible(camera, bg)
                 break
 
     selected_objects = []
     if bool(getattr(scene, 'record_selected_objects', False)):
-        for obj in getattr(bpy.context, 'selected_objects', []) or []:
-            if obj == camera:
-                continue
-            selected_objects.append({
-                'name': str(obj.name),
-                'location': list(obj.location),
-                'rotation': list(obj.rotation_euler),
-                'scale': list(obj.scale),
-            })
+        selected_objects = [capture_object_record(obj, bpy.context)
+                            for obj in recording_objects(bpy.context, camera)]
 
     return {
         'position': list(camera.location),
-        'rotation': list(camera.rotation_euler),
+        **capture_rotation(camera),
         'resolution_x': scene.render.resolution_x,
         'resolution_y': scene.render.resolution_y,
         'focal_length': camera.data.lens,
         'bg_image': bg_image,
         'bg_opacity': bg_opacity,
         'bg_depth': bg_depth,
+        'bg_visible': bg_visible,
         'frame_current': int(scene.frame_current),
         'memo': str(getattr(scene, 'saved_memo_text', '') or ''),
         'record_selected_objects': bool(getattr(scene, 'record_selected_objects', False)),
@@ -778,18 +854,38 @@ def _build_current_camera_saved_item(scene, camera) -> dict:
     }
 
 
-def _save_current_item_as_stock(scene, manager, new_item, overwrite_index: int | None = None):
+def _save_camera_data_or_report(operator, manager, filepath=None, **changes):
+    try:
+        manager.save_data(filepath, **changes)
+        return True
+    except Exception as exc:
+        operator.report({'ERROR'}, f"データを保存できませんでした: {exc}")
+        return False
+
+
+def _save_current_item_as_stock(scene, manager, new_item, overwrite_index: int | None = None,
+                                *, overwrite_pose_only=False):
     memo_text = str(new_item.get('memo', '') or '')
     saved_items = _ensure_manager_saved_data_normalized(manager)
+    pose_records = current_pose_records(scene, new_item)
+
+    if overwrite_index is not None and 0 <= overwrite_index < len(saved_items) and pose_records:
+        pose_names = {record['name'] for record in pose_records}
+        previous = {'selected_objects': [record for record in saved_items[overwrite_index]['selected_objects']
+                                         if record['name'] in pose_names]}
+        if stock_pose_signature(previous) != stock_pose_signature({'selected_objects': pose_records}):
+            if not (overwrite_pose_only and _only_pose_record_data_changed(saved_items[overwrite_index], new_item)):
+                overwrite_index = None
 
     if overwrite_index is not None and 0 <= overwrite_index < len(saved_items):
         existing = dict(saved_items[overwrite_index])
         if 'created_at' in existing:
             new_item['created_at'] = existing.get('created_at')
-        manager.saved_camera_data[overwrite_index] = _normalize_saved_item(new_item)
-        manager.save_data()
+        updated_items = list(saved_items)
+        updated_items[overwrite_index] = _normalize_saved_item(new_item)
+        manager.save_data(camera_data=updated_items)
         rebuild_enum_cache(manager)
-        _set_saved_camera_index_safe(scene, manager, overwrite_index)
+        _set_saved_camera_index_safe(scene, manager, overwrite_index, apply_saved_data=False)
         return 'overwrite'
 
     match_index = _find_matching_saved_item_index(manager, new_item)
@@ -799,10 +895,9 @@ def _save_current_item_as_stock(scene, manager, new_item, overwrite_index: int |
         if same_memo:
             return 'skip'
 
-    manager.saved_camera_data.append(_normalize_saved_item(new_item))
-    manager.save_data()
+    manager.save_data(camera_data=saved_items + [_normalize_saved_item(new_item)])
     rebuild_enum_cache(manager)
-    _set_saved_camera_index_safe(scene, manager, len(manager.saved_camera_data) - 1)
+    _set_saved_camera_index_safe(scene, manager, len(manager.saved_camera_data) - 1, apply_saved_data=False)
     return 'append'
 
 
@@ -812,18 +907,38 @@ def _normalized_without_created_at(item: dict) -> dict:
     return normalized
 
 
+def _only_pose_record_data_changed(existing_item: dict, current_item: dict) -> bool:
+    existing = _normalized_without_created_at(existing_item)
+    current = _normalized_without_created_at(current_item)
+    if stock_pose_signature(existing) == stock_pose_signature(current):
+        return False
+    # Require the same rig/bone membership; adding pose data is not a pose edit.
+    def bone_names(item):
+        return {obj['name']: tuple(bone['name'] for bone in obj.get('pose_bones', ()))
+                for obj in item['selected_objects'] if obj.get('pose_bones')}
+
+    if bone_names(existing) != bone_names(current):
+        return False
+    for item in (existing, current):
+        for obj in item['selected_objects']:
+            obj.pop('pose_bones', None)
+            obj.pop('pose_custom_properties', None)
+    return _stock_signature(existing) == _stock_signature(current)
+
+
 def _same_base_record_data(existing_item: dict, current_item: dict) -> bool:
     existing = _normalized_without_created_at(existing_item)
     current = _normalized_without_created_at(current_item)
     return (
         tuple(existing.get('position', ())) == tuple(current.get('position', ()))
-        and tuple(existing.get('rotation', ())) == tuple(current.get('rotation', ()))
+        and rotation_signature(existing) == rotation_signature(current)
         and existing.get('resolution_x') == current.get('resolution_x')
         and existing.get('resolution_y') == current.get('resolution_y')
         and existing.get('focal_length') == current.get('focal_length')
         and existing.get('bg_image') == current.get('bg_image')
         and existing.get('bg_opacity') == current.get('bg_opacity')
         and existing.get('bg_depth') == current.get('bg_depth')
+        and existing.get('bg_visible') == current.get('bg_visible')
         and existing.get('frame_current') == current.get('frame_current')
     )
 
@@ -837,7 +952,11 @@ class OBJECT_OT_save_camera_position(bpy.types.Operator):
         manager = get_camera_data_manager()
         if camera:
             new_item = _build_current_camera_saved_item(scene, camera)
-            result = _save_current_item_as_stock(scene, manager, new_item)
+            try:
+                result = _save_current_item_as_stock(scene, manager, new_item)
+            except Exception as exc:
+                self.report({'ERROR'}, f"データを保存できませんでした: {exc}")
+                return {'CANCELLED'}
             if result == 'skip':
                 self.report({'INFO'}, "同じ設定・同じ摘要メモのため記録しませんでした")
                 return {'CANCELLED'}
@@ -886,19 +1005,12 @@ def _selected_object_data_from_context(context, camera, excluded_names: set[str]
     excluded_names = set(excluded_names or set())
     selected_objects = []
     seen = set()
-    for obj in (getattr(context, 'selected_objects', []) or []):
-        if obj is None or obj == camera:
-            continue
+    for obj in recording_objects(context, camera):
         name = str(getattr(obj, 'name', '') or '')
         if not name or name in excluded_names or name in seen:
             continue
         seen.add(name)
-        selected_objects.append({
-            'name': name,
-            'location': list(obj.location),
-            'rotation': list(obj.rotation_euler),
-            'scale': list(obj.scale),
-        })
+        selected_objects.append(capture_object_record(obj, context))
     return selected_objects
 
 
@@ -971,8 +1083,10 @@ class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
 
         saved_items = _ensure_manager_saved_data_normalized(manager)
         if not saved_items:
-            self.report({'WARNING'}, "記録データがありません")
-            return {'CANCELLED'}
+            result = OBJECT_OT_save_camera_position.execute(self, context)
+            if result == {'FINISHED'}:
+                _clear_recorded_object_delete_candidates_from_ui(context)
+            return result
 
         index = _safe_saved_index(scene, manager)
         if not (0 <= index < len(saved_items)):
@@ -995,17 +1109,20 @@ class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
 
         existing_normalized = _normalized_without_created_at(existing)
         current_normalized = _normalized_without_created_at(current_item)
-        if existing_normalized == current_normalized:
+        if _stock_signature(existing_normalized) == _stock_signature(current_normalized):
             self.report({'INFO'}, "同じ設定・同じ追加データのため記録しませんでした")
             return {'CANCELLED'}
         same_base_record_data = _same_base_record_data(existing, current_item)
 
-        result = _save_current_item_as_stock(
-            scene,
-            manager,
-            current_item,
-            overwrite_index=index if same_base_record_data else None,
-        )
+        try:
+            result = _save_current_item_as_stock(
+                scene, manager, current_item,
+                overwrite_index=index if same_base_record_data else None,
+                overwrite_pose_only=True,
+            )
+        except Exception as exc:
+            self.report({'ERROR'}, f"データを保存できませんでした: {exc}")
+            return {'CANCELLED'}
         if result == 'skip':
             self.report({'INFO'}, "同じ設定・同じ追加データのため記録しませんでした")
             return {'CANCELLED'}
@@ -1110,8 +1227,9 @@ class OBJECT_OT_delete_camera_position(bpy.types.Operator):
         saved_items = _ensure_manager_saved_data_normalized(manager)
         if 0 <= index < len(saved_items):
             deleted_index = index
-            manager.saved_camera_data.pop(index)
-            manager.save_data()
+            updated_items = saved_items[:index] + saved_items[index + 1:]
+            if not _save_camera_data_or_report(self, manager, camera_data=updated_items):
+                return {'CANCELLED'}
             rebuild_enum_cache(manager)
             total = len(_ensure_manager_saved_data_normalized(manager))
             if total == 0:
@@ -1328,8 +1446,7 @@ class OBJECT_OT_load_background_image(bpy.types.Operator):
                 scene.frame_set(int(fnum))
 
             # 既定の読込フォルダ更新
-            manager.background_image_folder_path = _safe_existing_dirpath(self.directory, fallback=manager.background_image_folder_path)
-            manager.save_data()
+            manager.save_data(background_image_folder_path=_safe_existing_dirpath(self.directory, fallback=manager.background_image_folder_path))
             self.report({'INFO'}, f"下絵を読み込みました: {self.filepath}")
         except Exception as e:
             self.report({'ERROR'}, f"下絵の読み込みに失敗: {e}")
@@ -1366,6 +1483,7 @@ class OBJECT_OT_reload_background_image(bpy.types.Operator):
 
         # まず既存の下絵スロットを確保
         bg = _get_or_create_background_slot(camera)
+        current_visible = _get_current_background_visible(camera, bg)
 
         # 1) 既に画像があるなら、そのファイルパスを優先して単純リロード
         if bg.image:
@@ -1383,7 +1501,7 @@ class OBJECT_OT_reload_background_image(bpy.types.Operator):
                     if img.size[0] > 0 and img.size[1] > 0:
                         scene.render.resolution_x = img.size[0]
                         scene.render.resolution_y = img.size[1]
-                    _set_background_visibility(camera, bg, True)
+                    _set_background_visibility(camera, bg, current_visible)
                     self.report({'INFO'}, f"再読み込み: {safe_basename(img.filepath)}")
                     return {'FINISHED'}
                 except Exception as e:
@@ -1402,7 +1520,8 @@ class OBJECT_OT_reload_background_image(bpy.types.Operator):
                         raise RuntimeError("画像ファイルが見つからないか、読み込めませんでした")
                     bg.image = img
                     _apply_background_display_settings(bg, data)
-                    _set_background_visibility(camera, bg, True)
+                    visible = bool(_saved_value(data, 'bg_visible', current_visible))
+                    _set_background_visibility(camera, bg, visible)
                     if img.size[0] > 0 and img.size[1] > 0:
                         scene.render.resolution_x = img.size[0]
                         scene.render.resolution_y = img.size[1]
@@ -1444,8 +1563,8 @@ class OBJECT_OT_set_output_folder(bpy.types.Operator):
     def execute(self, context):
         manager = get_camera_data_manager()
         normalized_dir = _safe_existing_dirpath(self.directory, fallback=manager.output_folder_path)
-        manager.output_folder_path = normalized_dir
-        manager.save_data()
+        if not _save_camera_data_or_report(self, manager, output_folder_path=normalized_dir):
+            return {'CANCELLED'}
         self.report({'INFO'}, f"出力フォルダを指定しました: {normalized_dir}")
         return {'FINISHED'}
     def invoke(self, context, event):
@@ -1461,8 +1580,8 @@ class OBJECT_OT_set_background_image_folder(bpy.types.Operator):
     def execute(self, context):
         manager = get_camera_data_manager()
         normalized_dir = _safe_existing_dirpath(self.directory, fallback=manager.background_image_folder_path)
-        manager.background_image_folder_path = normalized_dir
-        manager.save_data()
+        if not _save_camera_data_or_report(self, manager, background_image_folder_path=normalized_dir):
+            return {'CANCELLED'}
         self.report({'INFO'}, f"読込場所を設定しました: {normalized_dir}")
         return {'FINISHED'}
     def invoke(self, context, event):
@@ -1476,8 +1595,8 @@ class OBJECT_OT_reset_saved_data(bpy.types.Operator):
     bl_label = "記録データの初期化"
     def execute(self, context):
         manager = get_camera_data_manager()
-        manager.saved_camera_data = []
-        manager.save_data()
+        if not _save_camera_data_or_report(self, manager, camera_data=[]):
+            return {'CANCELLED'}
         rebuild_enum_cache(manager)
         try:
             _set_saved_camera_index_safe(context.scene, manager, 0)
@@ -1495,7 +1614,8 @@ class OBJECT_OT_save_stock_data(bpy.types.Operator):
     def execute(self, context):
         manager = get_camera_data_manager()
         filepath = _safe_json_path(self.filepath)
-        manager.save_data(filepath)
+        if not _save_camera_data_or_report(self, manager, filepath):
+            return {'CANCELLED'}
         self.report({'INFO'}, f"ストックデータを保存しました: {filepath}")
         return {'FINISHED'}
     def invoke(self, context, event):
@@ -1511,14 +1631,15 @@ class OBJECT_OT_load_stock_data(bpy.types.Operator):
     def execute(self, context):
         manager = get_camera_data_manager()
         filepath = _safe_json_path(self.filepath)
-        if os.path.exists(filepath):
+        try:
             manager.load_data(filepath)
-            rebuild_enum_cache(manager)
-            scene = context.scene
-            _set_saved_camera_index_safe(scene, manager, 0)
-            self.report({'INFO'}, f"ストックデータを読込しました: {filepath}")
-        else:
-            self.report({'ERROR'}, f"ファイルが存在しません: {filepath}")
+        except Exception as exc:
+            self.report({'ERROR'}, f"ストックデータを読込できませんでした: {exc}")
+            return {'CANCELLED'}
+        rebuild_enum_cache(manager)
+        scene = context.scene
+        _set_saved_camera_index_safe(scene, manager, 0)
+        self.report({'INFO'}, f"ストックデータを読込しました: {filepath}")
         return {'FINISHED'}
     def invoke(self, context, event):
         manager = get_camera_data_manager()
@@ -1547,14 +1668,8 @@ class OBJECT_OT_append_stock_data(bpy.types.Operator):
             return {'CANCELLED'}
 
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-
-            # 期待する形式は {"camera_data": [...], ...}
-            if isinstance(data, dict):
-                incoming_list = _normalize_saved_list(data.get('camera_data', []))
-            else:
-                incoming_list = []
+            data = _read_stock_json(filepath, 'camera_data')
+            incoming_list = _normalize_saved_list(data['camera_data'])
 
             # 既存データへ「追加」
             # ただし「完全同一データは登録スキップ」がONなら、既存と同一のものは追加しない
@@ -1565,13 +1680,13 @@ class OBJECT_OT_append_stock_data(bpy.types.Operator):
                     manager.saved_camera_data,
                     incoming_list,
                 )
-                manager.saved_camera_data = merged
+                updated_items = merged
             else:
-                manager.saved_camera_data.extend(incoming_list)
+                updated_items = manager.saved_camera_data + incoming_list
                 added_count = len(incoming_list)
 
             # 追加した結果を既存の保存先へ反映（= 結合して既存ファイルにする）
-            manager.save_data()
+            manager.save_data(camera_data=updated_items)
 
             rebuild_enum_cache(manager)
             _set_saved_camera_index_safe(context.scene, manager, 0)
@@ -1628,8 +1743,12 @@ class OBJECT_OT_delete_saved_data(bpy.types.Operator):
         manager = get_camera_data_manager()
         try:
             deleted_index = self.index
-            manager.saved_camera_data.pop(deleted_index)
-            manager.save_data()
+            if not 0 <= deleted_index < len(manager.saved_camera_data):
+                raise IndexError(deleted_index)
+            updated_items = list(manager.saved_camera_data)
+            updated_items.pop(deleted_index)
+            if not _save_camera_data_or_report(self, manager, camera_data=updated_items):
+                return {'CANCELLED'}
             rebuild_enum_cache(manager)
             scene = context.scene
             total = len(_ensure_manager_saved_data_normalized(manager))
@@ -1661,9 +1780,9 @@ class OBJECT_OT_sort_saved_data(bpy.types.Operator):
             name = unicodedata.normalize("NFC", str(d.get('bg_image', "")))
             created = d.get('created_at', 0.0)
             return (name, created)
-        saved_items.sort(key=_key, reverse=bool(self.reverse))
-        manager.saved_camera_data = saved_items
-        manager.save_data()
+        updated_items = sorted(saved_items, key=_key, reverse=bool(self.reverse))
+        if not _save_camera_data_or_report(self, manager, camera_data=updated_items):
+            return {'CANCELLED'}
         rebuild_enum_cache(manager)
         _set_saved_camera_index_safe(context.scene, manager, 0)
         order = "降順" if bool(self.reverse) else "昇順"
@@ -1773,7 +1892,7 @@ class OBJECT_OT_reload_current_saved_stock(bpy.types.Operator):
             return {'CANCELLED'}
         index = _safe_saved_index(scene, manager)
         index = max(0, min(index, len(saved_items) - 1))
-        _set_saved_camera_index_safe(scene, manager, index)
+        _set_saved_camera_index_safe(scene, manager, index, apply_saved_data=False)
         _apply_saved_camera_data(scene, camera, manager, saved_items[index])
         _sync_scene_saved_memo(scene, manager)
         _apply_camera_view(context)
@@ -1873,7 +1992,8 @@ def update_saved_camera_index(self, context):
         index = max(0, min(index, len(saved_items) - 1))
         data = saved_items[index]
 
-        _apply_saved_camera_data(scene, camera, manager, data)
+        if not _SAVED_STOCK_APPLY_SUSPENDED:
+            _apply_saved_camera_data(scene, camera, manager, data)
         _sync_scene_saved_memo(scene, manager)
 
         _apply_camera_view(context)
@@ -1921,8 +2041,14 @@ def register_scene_simple_properties():
     )
     bpy.types.Scene.record_selected_objects = bpy.props.BoolProperty(
         name="選択OBJデータ",
-        description="ON のとき、選択中OBJの位置・回転・サイズを記録データへ含めます",
+        description="ON のとき、選択中OBJの位置・回転・サイズとアーマチュアの全ボーンのポーズをストックへ記録します。キーフレームは変更しません",
         default=False,
+    )
+    bpy.types.Scene.mpm_pose_keyframe_priority = bpy.props.BoolProperty(
+        name="ポーズをキーフレーム優先",
+        description="次のストック読込時、ONでは既存キー、OFFでは保存ポーズを優先します。キーは変更しません。OFFでも再評価時にキーへ戻る場合があります。ドライバー・NLAの保護は維持します",
+        default=False,
+        options=set(),
     )
 
 # =========================
@@ -1974,7 +2100,7 @@ def unregister_camera_sync_properties():
         delattr(bpy.types.Camera, "mpm_bg_visible")
 
 def unregister_scene_simple_properties():
-    for attr in ("saved_camera_index", "show_settings", "show_background_section", "show_shortcut_settings_section", "open_output_after_render", "bg_cycle_skip_stocked", "saved_memo_text", "record_view_layer_exclude_state", "record_selected_objects"):
+    for attr in ("saved_camera_index", "show_settings", "show_background_section", "show_shortcut_settings_section", "open_output_after_render", "bg_cycle_skip_stocked", "saved_memo_text", "record_view_layer_exclude_state", "record_selected_objects", "mpm_pose_keyframe_priority"):
         if hasattr(bpy.types.Scene, attr):
             delattr(bpy.types.Scene, attr)
 
@@ -2042,8 +2168,13 @@ def _ensure_core_handlers_unregistered() -> None:
 def _on_load_post(dummy):
     """ファイル読み込み後の初期整備（ハンドラ登録等）"""
     global _pending_open_after_render, _pending_open_folder_path, _POSTLOAD_FIX_PENDING
+    global _KEYMAP_REGISTRATION_PENDING
     _pending_open_after_render = False
     _pending_open_folder_path = ""
+    # Non-persistent timers are removed by file loading, including pending fixes.
+    _POSTLOAD_FIX_PENDING = False
+    _KEYMAP_REGISTRATION_PENDING = False
+    _schedule_addon_keymap_registration()
     _ensure_core_handlers_registered()
     manager = get_camera_data_manager()
     rebuild_enum_cache(manager)
@@ -2352,7 +2483,7 @@ def register_core():
         bpy.utils.register_class(cls)
 
     manager = get_camera_data_manager()
-    manager.load_data()
+    _load_initial_stock_data(manager)
     rebuild_enum_cache(manager)
 
     _ensure_core_handlers_registered()
@@ -2374,7 +2505,12 @@ def register_core():
     _schedule_addon_keymap_registration()
 
 def unregister_core():
-    global _CAMERA_DATA_MANAGER, _KEYMAP_REGISTRATION_PENDING
+    global _CAMERA_DATA_MANAGER, _KEYMAP_REGISTRATION_PENDING, _POSTLOAD_FIX_PENDING
+    global _pending_open_after_render, _pending_open_folder_path
+    _unregister_all_timers()
+    _POSTLOAD_FIX_PENDING = False
+    _pending_open_after_render = False
+    _pending_open_folder_path = ""
     # ヘッダー/ハンドラ撤去
     _ensure_core_handlers_unregistered()
 
@@ -2405,5 +2541,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.190
+# Version Footer: 1.203
 # -------------------------------

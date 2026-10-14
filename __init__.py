@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.190）:
-# - XMP付与レンダリングのShift+F12ショートカット登録を安定化
+# 変更点（1.203）:
+# - JSON読込保護、画像送り・ポーズ復元の修正、読込・保存処理の軽量化
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 190),
+    "version": (1, 0, 203),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -36,5 +36,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.190
+# Version Footer: 1.203
 # -------------------------------

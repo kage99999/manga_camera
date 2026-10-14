@@ -6,12 +6,13 @@
 # - 「有効」ON中、カメラ移動に合わせてレンズを自動調整し、ターゲットの見かけサイズを一定に保つ
 # - UIは「焦点距離」の直下に配置（ui.py側）
 # - 依頼により「基準をキャプチャ」ボタンと「オートキー（レンズ）」はUIに出さない
-# 変更点（1.127）:
-# - バージョン更新に追従
-# - ドリーズーム機能自体の挙動は現状維持
+# 変更点（1.203）:
+# - バージョン表記同期
+# - ファイル読込後と他シーンでの無効化後も更新ハンドラーを維持
 
 import bpy
 import mathutils
+from bpy.app.handlers import persistent
 
 from bpy.props import (
     BoolProperty,
@@ -342,6 +343,7 @@ def _update_lens(scene, camera_obj, target_obj):
         return
 
 
+@persistent
 def _depsgraph_handler(scene, depsgraph):
     # シーンごとの更新で呼ばれる
     global _DZ_UPDATING
@@ -381,14 +383,16 @@ def _ensure_handler_registered():
     # 二重登録防止
     handlers = bpy.app.handlers.depsgraph_update_post
     for h in handlers:
-        if getattr(h, "__name__", "") == _depsgraph_handler.__name__:
+        if (getattr(h, "__name__", "") == _depsgraph_handler.__name__
+                and getattr(h, "__module__", "") == __name__):
             return
     handlers.append(_depsgraph_handler)
 
 
 def _ensure_handler_unregistered():
     handlers = bpy.app.handlers.depsgraph_update_post
-    remove_list = [h for h in handlers if getattr(h, "__name__", "") == _depsgraph_handler.__name__]
+    remove_list = [h for h in handlers if getattr(h, "__name__", "") == _depsgraph_handler.__name__
+                   and getattr(h, "__module__", "") == __name__]
     for h in remove_list:
         try:
             handlers.remove(h)
@@ -414,11 +418,10 @@ def _on_enabled_update(self, context):
         if cam is not None and getattr(cam, "type", "") == "CAMERA" and tgt is not None:
             _capture_baseline(scene, cam, tgt)
     else:
-        # OFF：ハンドラは一旦解除（簡易）
+        # The shared handler must remain available for other enabled scenes.
         self.lock_active = False
         self.lock_mode = ""
         self.lock_distance = 0.0
-        _ensure_handler_unregistered()
 
 
 def _poll_target_obj(props, obj):
@@ -621,5 +624,5 @@ def unregister_dolly():
 
 # -------------------------------
 # ファイル名：dolly.py
-# Version Footer: 1.127
+# Version Footer: 1.203
 # -------------------------------

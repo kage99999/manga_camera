@@ -2,8 +2,8 @@
 # ファイル名：lattice_stock.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション ストック保存/復元
-# 変更点（1.175）:
-# - lattice_manager.py からストック保存/復元処理を分離
+# 変更点（1.203）:
+# - ストックの全プロパティ復元後に一度だけ実効状態を反映
 
 from . import lattice_manager as _lm
 
@@ -48,9 +48,14 @@ def apply_lattice_stock_state(scene, state):
     """ストックから読み込んだラティス状態を復元する。"""
     if scene is None:
         return 0
+    with _lm._suspend_lattice_updates(scene):
+        enabled = _restore_lattice_stock_properties(scene, state)
+    return _lm.apply_lattice_management_enabled(scene, enabled)
+
+
+def _restore_lattice_stock_properties(scene, state):
     if not isinstance(state, dict):
         state = {"lattice_enabled": bool(state)}
-    changed = 0
     sets = _get_lattice_sets(scene)
     set_states = state.get("set_states", [])
     if sets is not None and isinstance(set_states, list):
@@ -93,15 +98,9 @@ def apply_lattice_stock_state(scene, state):
     try:
         if hasattr(scene, "mpm_lattice_management_enabled"):
             scene.mpm_lattice_management_enabled = enabled
-        else:
-            changed += apply_lattice_management_enabled(scene, enabled)
-    except Exception:
-        changed += apply_lattice_management_enabled(scene, enabled)
-    try:
-        changed += apply_lattice_management_enabled(scene, enabled)
     except Exception:
         pass
-    return changed
+    return enabled
 
 
 
@@ -110,5 +109,5 @@ __all__ = ["export_lattice_stock_state", "apply_lattice_stock_state"]
 
 # -------------------------------
 # ファイル名：lattice_stock.py
-# Version Footer: 1.175
+# Version Footer: 1.203
 # -------------------------------

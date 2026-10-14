@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.186）:
-# - 付随データ表示の角括弧と「有」を削除
-# - 付随データ表示を同幅2列へ整列
+# 変更点（1.203）:
+# - ポーズ優先チェック下の常設説明枠を削除
 
 import bpy
 
@@ -15,6 +14,7 @@ from .core import (
     _sync_scene_saved_memo,
     _safe_saved_index,
     _get_saved_item_safe,
+    _is_valid_camera_object,
     _get_valid_scene_camera,
     _sanitize_view3d_local_cameras,
     PANEL_LABEL,
@@ -151,7 +151,11 @@ class MPM_OT_mark_recorded_object_delete_candidate(bpy.types.Operator):
         if not names_to_remove:
             self.report({'WARNING'}, "削除する記録済みOBJがありません")
             return {'CANCELLED'}
-        removed = _remove_recorded_objects_from_current_stock(context, names_to_remove)
+        try:
+            removed = _remove_recorded_objects_from_current_stock(context, names_to_remove)
+        except Exception as exc:
+            self.report({'ERROR'}, f"データを保存できませんでした: {exc}")
+            return {'CANCELLED'}
         if removed <= 0:
             self.report({'WARNING'}, "記録済みOBJから削除できる対象がありません")
             return {'CANCELLED'}
@@ -194,7 +198,11 @@ class MPM_OT_select_all_recorded_objects(bpy.types.Operator):
     bl_description = "現在の保存データの記録済みOBJデータを空にします。摘要メモとBlender上のOBJ本体は削除しません"
 
     def execute(self, context):
-        removed = _clear_recorded_objects_from_current_stock(context)
+        try:
+            removed = _clear_recorded_objects_from_current_stock(context)
+        except Exception as exc:
+            self.report({'ERROR'}, f"データを保存できませんでした: {exc}")
+            return {'CANCELLED'}
         if removed <= 0:
             self.report({'WARNING'}, "削除できる記録済みOBJデータがありません")
             return {'CANCELLED'}
@@ -306,7 +314,8 @@ def _draw_record_read_controls(layout, context):
     row.operator("camera.load_background_image", text="現在のカメラへ下絵を読込")
     row.operator("camera.reload_background_image", text="再読込")
 
-    if manager.saved_camera_data:
+    total = len(manager.saved_camera_data)
+    if total > 0:
         layout.label(text="下絵のファイル名")
         ensure_valid_saved_enum(scene, manager)
         try:
@@ -318,16 +327,23 @@ def _draw_record_read_controls(layout, context):
         current_data = _get_saved_item_safe(manager, _safe_saved_index(scene, manager), default={}) or {}
         _draw_saved_data_status_labels(layout, current_data)
 
-        box = layout.box()
-        row = box.row(align=True)
-        row.scale_y = 1.2
-        row.operator("camera.prev_saved_stock", text="<")
-        sub = row.row()
-        sub.alignment = 'CENTER'
+    box = layout.box()
+    row = box.row(align=True)
+    row.scale_y = 1.2
+    prev_col = row.row(align=True)
+    prev_col.enabled = total > 0
+    prev_col.operator("camera.prev_saved_stock", text="<")
+    sub = row.row()
+    sub.alignment = 'CENTER'
+    if total > 0:
         cur_idx = int(getattr(scene, "saved_camera_index", "0") or 0)
-        total = len(manager.saved_camera_data)
         sub.operator("camera.reload_current_saved_stock", text=f"{cur_idx + 1} / {total}", emboss=False)
-        row.operator("camera.next_saved_stock", text=">")
+    else:
+        sub.label(text="0 / 0")
+    next_col = row.row(align=True)
+    next_col.enabled = total > 0
+    next_col.operator("camera.next_saved_stock", text=">")
+    layout.prop(scene, 'mpm_pose_keyframe_priority', text="ポーズをキーフレーム優先")
 
 
 
@@ -410,12 +426,8 @@ def _draw_saved_memo_controls(layout, context):
     saved_items = manager.saved_camera_data
     box = layout.column()
     if not saved_items:
-        box.enabled = False
         box.label(text="記録データがありません")
-        box.prop(scene, 'saved_memo_text', text="")
-        return
 
-    _sync_scene_saved_memo(scene, manager)
     box.prop(scene, 'saved_memo_text', text="摘要メモ")
     box.prop(scene, 'record_view_layer_exclude_state', text="ビューレイヤー除外状態を保存")
     box.prop(scene, 'record_selected_objects', text="選択OBJデータ")
@@ -682,9 +694,9 @@ def _apply_recorded_object_edit_to_current_stock(context, new_recorded_objects):
     item["selected_objects"] = list(new_recorded_objects or [])
     item["record_selected_objects"] = bool(item["selected_objects"])
     item["memo"] = str(getattr(scene, "saved_memo_text", "") or item.get("memo", "") or "")
-    saved_items[index] = item
-    manager.saved_camera_data = saved_items
-    manager.save_data()
+    updated_items = list(saved_items)
+    updated_items[index] = item
+    manager.save_data(camera_data=updated_items)
     rebuild_enum_cache(manager)
     ensure_valid_saved_enum(scene, manager)
     _sync_scene_saved_memo(scene, manager)
@@ -797,7 +809,7 @@ def _sync_recorded_object_display_items(wm, names, source_index=None):
     collection = wm.mpm_recorded_object_items_v130
     current_names = [str(getattr(item, "object_name", "") or "") for item in collection]
     try:
-        current_source_index = int(getattr(wm, "mpm_recorded_object_source_index_v145", -1) or -1)
+        current_source_index = int(getattr(wm, "mpm_recorded_object_source_index_v145", -1))
     except Exception:
         current_source_index = -1
     try:
@@ -880,8 +892,74 @@ def _draw_cycle_controls(layout, context):
     row.operator("camera.next_folder_image", text=">")
 
 
+def _scene_has_valid_camera(scene) -> bool:
+    for obj in getattr(scene, "objects", []) or []:
+        if _is_valid_camera_object(obj):
+            return True
+    return False
+
+
+def _is_camera_hidden_for_view(camera, context) -> bool:
+    if camera is None:
+        return False
+    try:
+        if bool(getattr(camera, "hide_viewport", False)):
+            return True
+    except Exception:
+        pass
+    view_layer = getattr(context, "view_layer", None)
+    try:
+        if view_layer is not None and bool(camera.hide_get(view_layer=view_layer)):
+            return True
+        if view_layer is None and bool(camera.hide_get()):
+            return True
+    except TypeError:
+        try:
+            if bool(camera.hide_get()):
+                return True
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        if view_layer is not None:
+            return not bool(camera.visible_get(view_layer=view_layer))
+        return not bool(camera.visible_get())
+    except TypeError:
+        try:
+            return not bool(camera.visible_get())
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return False
+
+
+def _draw_background_error_messages(layout, messages):
+    if not messages:
+        return
+    box = layout.box()
+    box.alert = True
+    for message in messages:
+        row = box.row()
+        row.label(text=message, icon='ERROR')
+
+
 def _draw_background_controls(layout, context):
     camera = _get_scene_camera(context)
+    errors = []
+    if camera is None:
+        if _scene_has_valid_camera(getattr(context, "scene", None)):
+            errors.append("アクティブカメラが設定されていません")
+        else:
+            errors.append("カメラがありません")
+    elif _is_camera_hidden_for_view(camera, context):
+        errors.append("アクティブカメラが非表示です")
+        errors.append("下絵はカメラビューに表示されません")
+    _draw_background_error_messages(layout, errors)
+    if camera is None:
+        return
+
     if not (camera and getattr(camera, "data", None) and camera.data.background_images):
         layout.label(text="下絵がありません")
         return
@@ -1217,5 +1295,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.186
+# Version Footer: 1.203
 # -------------------------------

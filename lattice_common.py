@@ -2,8 +2,9 @@
 # ファイル名：lattice_common.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション共通定数・共通ヘルパー
-# 変更点（1.175）:
-# - lattice_manager.py から共通処理を分離
+# 変更点（1.203）:
+# - バージョン表記同期
+# - ラティス共通処理自体の挙動は現状維持
 
 import bpy
 import uuid
@@ -128,8 +129,10 @@ def _ensure_active_lattice_index(scene):
     sets = _get_lattice_sets(scene)
     if sets is None or len(sets) == 0:
         try:
-            scene.mpm_lattice_active_set_index = -1
-            scene.mpm_lattice_active_set_enum = "__none__"
+            if scene.mpm_lattice_active_set_index != -1:
+                scene.mpm_lattice_active_set_index = -1
+            if scene.mpm_lattice_active_set_enum != "__none__":
+                scene.mpm_lattice_active_set_enum = "__none__"
         except Exception:
             pass
         return -1
@@ -139,7 +142,8 @@ def _ensure_active_lattice_index(scene):
         index = 0
     index = max(0, min(index, len(sets) - 1))
     try:
-        scene.mpm_lattice_active_set_index = index
+        if scene.mpm_lattice_active_set_index != index:
+            scene.mpm_lattice_active_set_index = index
         active_uid = _ensure_set_uid(sets[index])
         if str(getattr(scene, "mpm_lattice_active_set_enum", "") or "") != active_uid:
             scene.mpm_lattice_active_set_enum = active_uid
@@ -414,5 +418,5 @@ __all__ = [
 
 # -------------------------------
 # ファイル名：lattice_common.py
-# Version Footer: 1.175
+# Version Footer: 1.203
 # -------------------------------

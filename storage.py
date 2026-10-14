@@ -2,15 +2,19 @@
 # ファイル名：storage.py
 # 00漫画用Camera Position Manager
 # 機能：保存データとパス解決の共通処理
-# 変更点（1.186）:
-# - 付随データUI調整に合わせてバージョン更新
+# 変更点（1.203）:
+# - JSON形式検証、比較の事前絞込、ストック単位の高速JSON書込
 
 import json
 import os
 import unicodedata
+import uuid
+from contextlib import contextmanager
 from datetime import datetime
 
 import bpy
+from .transforms import normalize_rotation, rotation_signature
+from .pose_stock import normalize_pose_fields, pose_signature
 
 _ENUM_CACHE: list[tuple[str, str, str]] = []
 
@@ -81,14 +85,71 @@ def _default_json_dialog_filepath(manager, fallback_filename: str = "camera_posi
     return os.path.join(default_dir, filename)
 
 
+@contextmanager
+def _atomic_writer(path, mode='wb', encoding=None):
+    folder = os.path.dirname(os.path.abspath(path))
+    os.makedirs(folder, exist_ok=True)
+    tmp_path = None
+    try:
+        candidate = os.path.join(folder, '.mpm-' + uuid.uuid4().hex + '.tmp')
+        # Exclusive creation fails immediately on permission errors on Windows.
+        with open(candidate, mode='x' + mode[1:], encoding=encoding) as handle:
+            tmp_path = candidate
+            yield handle
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 def _write_json_atomic(filepath: str, data: dict) -> None:
     path = _safe_json_path(filepath)
-    folder = os.path.dirname(path) or bpy.utils.user_resource('CONFIG')
-    os.makedirs(folder, exist_ok=True)
-    tmp_path = path + '.tmp'
-    with open(tmp_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp_path, path)
+    with _atomic_writer(path, mode='w', encoding='utf-8') as f:
+        # Encode one stock at a time: fast encoder, without a second full-file string.
+        f.write('{')
+        for index, (key, value) in enumerate(data.items()):
+            if index:
+                f.write(', ')
+            f.write(json.dumps(key, ensure_ascii=False) + ': ')
+            if isinstance(value, list):
+                f.write('[')
+                for item_index, item in enumerate(value):
+                    if item_index:
+                        f.write(', ')
+                    f.write(json.dumps(item, ensure_ascii=False))
+                f.write(']')
+            else:
+                f.write(json.dumps(value, ensure_ascii=False))
+        f.write('}')
+
+
+def _read_stock_json(filepath, stock_key):
+    with open(filepath, 'r', encoding='utf-8-sig') as handle:
+        data = json.load(handle)
+    other_key = 'all_object_data' if stock_key == 'camera_data' else 'camera_data'
+    if (not isinstance(data, dict) or stock_key not in data or other_key in data
+            or not isinstance(data[stock_key], list)
+            or any(not isinstance(item, dict) for item in data[stock_key])):
+        label = '通常ストック' if stock_key == 'camera_data' else '全OBJデータ'
+        raise ValueError(f'{label}用のJSONではありません。現在のデータは変更していません')
+    return data
+
+
+def _load_initial_stock_data(manager):
+    try:
+        manager.load_data(create_if_missing=True)
+    except Exception as exc:
+        # Keep registration usable without allowing the next record to destroy a bad file.
+        manager._blocked_save_path = manager.save_file_path
+        print(f'記録JSONを読み込めませんでした。別名で保存するか正常なJSONを読み込んでください: {exc}')
+
+
+def _check_stock_save_target(manager, target_path, explicit_path):
+    blocked = getattr(manager, '_blocked_save_path', None)
+    if blocked and not explicit_path and os.path.normcase(target_path) == os.path.normcase(blocked):
+        raise ValueError('読込に失敗したJSONを保護しています。別名で保存するか正常なJSONを読み込んでください')
 
 
 def _resolve_bg_image_path(manager, filename: str) -> str:
@@ -215,20 +276,23 @@ def _stock_signature(item: dict) -> tuple:
             (
                 obj.get("name"),
                 tuple(obj.get("location", ())),
-                tuple(obj.get("rotation", ())),
+                rotation_signature(obj),
                 tuple(obj.get("scale", ())),
+                pose_signature(obj),
             )
         )
     return (
         tuple(item.get("position", ())),
-        tuple(item.get("rotation", ())),
+        rotation_signature(item),
         item.get("resolution_x"),
         item.get("resolution_y"),
         item.get("focal_length"),
         item.get("bg_image"),
         item.get("bg_opacity"),
         item.get("bg_depth"),
+        bool(item.get("bg_visible", item.get("bg_image") not in ("", "No File"))),
         item.get("frame_current"),
+        str(item.get("memo", '') or ''),
         bool(item.get("record_selected_objects", False)),
         tuple(selected_objects),
         bool(item.get("lattice_enabled", False)),
@@ -261,16 +325,22 @@ def _normalize_saved_item(item) -> dict:
         except Exception:
             return list(fallback)
 
+    bg_image_value = unicodedata.normalize('NFC', str(item.get('bg_image', 'No File') or 'No File'))
+    bg_visible_value = item.get('bg_visible', bg_image_value not in ('', 'No File'))
+    if bg_visible_value is None:
+        bg_visible_value = bg_image_value not in ('', 'No File')
+
     out = {
         'position': _vec3(item.get('position', (0.0, 0.0, 0.0)), (0.0, 0.0, 0.0)),
-        'rotation': _vec3(item.get('rotation', (0.0, 0.0, 0.0)), (0.0, 0.0, 0.0)),
+        **normalize_rotation(item),
         'resolution_x': int(item.get('resolution_x', 1920) or 1920),
         'resolution_y': int(item.get('resolution_y', 1080) or 1080),
         'focal_length': float(item.get('focal_length', 50.0) or 50.0),
-        'bg_image': unicodedata.normalize('NFC', str(item.get('bg_image', 'No File') or 'No File')),
-        'bg_opacity': float(item.get('bg_opacity', 1.0) or 1.0),
+        'bg_image': bg_image_value,
+        'bg_opacity': float(_saved_value(item, 'bg_opacity', 1.0)),
         'bg_depth': str(item.get('bg_depth', 'BACK') or 'BACK'),
-        'frame_current': int(item.get('frame_current', 1) or 1),
+        'bg_visible': bool(bg_visible_value),
+        'frame_current': int(_saved_value(item, 'frame_current', 1)),
         'memo': str(item.get('memo', '') or ''),
         'record_selected_objects': bool(item.get('record_selected_objects', False)),
         'selected_objects': [],
@@ -287,8 +357,9 @@ def _normalize_saved_item(item) -> dict:
             out['selected_objects'].append({
                 'name': str(obj.get('name', '') or ''),
                 'location': _vec3(obj.get('location', (0.0, 0.0, 0.0)), (0.0, 0.0, 0.0)),
-                'rotation': _vec3(obj.get('rotation', (0.0, 0.0, 0.0)), (0.0, 0.0, 0.0)),
+                **normalize_rotation(obj),
                 'scale': _vec3(obj.get('scale', (1.0, 1.0, 1.0)), (1.0, 1.0, 1.0)),
+                **normalize_pose_fields(obj),
             })
     if 'created_at' in item:
         out['created_at'] = item.get('created_at')
@@ -314,9 +385,13 @@ def _ensure_manager_saved_data_normalized(manager) -> list:
         current = getattr(manager, 'saved_camera_data', [])
     except Exception:
         current = []
+    # Manager load/save commits own normalized lists. Reads reuse that snapshot.
+    if isinstance(current, list) and current is getattr(manager, '_normalized_saved_data', None):
+        return current
     normalized = _normalize_saved_list(current)
     try:
         manager.saved_camera_data = normalized
+        manager._normalized_saved_data = normalized
     except Exception:
         pass
     return normalized
@@ -346,20 +421,38 @@ def _append_unique_saved_items(existing_items, incoming_items):
     return result, added_count, skipped_count
 
 
+def _stock_comparison_prefix(item):
+    # These fields are necessary for a match, and do not traverse any pose bones.
+    return (
+        tuple(item.get('position', ())), rotation_signature(item),
+        item.get('resolution_x'), item.get('resolution_y'), item.get('focal_length'),
+        item.get('bg_image'), item.get('bg_opacity'), item.get('bg_depth'),
+        bool(item.get('bg_visible', item.get('bg_image') not in ('', 'No File'))),
+        item.get('frame_current'), str(item.get('memo', '') or ''),
+        bool(item.get('record_selected_objects', False)),
+        bool(item.get('lattice_enabled', False)),
+        bool(item.get('record_view_layer_exclude_state', False)),
+    )
+
+
 def _find_matching_saved_item_index(manager, new_item) -> int:
     try:
-        target_sig = _stock_signature(_normalize_saved_item(new_item))
+        normalized = _normalize_saved_item(new_item)
+        prefix = _stock_comparison_prefix(normalized)
     except Exception:
-        target_sig = None
-    if not target_sig:
         return -1
+    target_sig = None
     items = _ensure_manager_saved_data_normalized(manager)
     for i, item in enumerate(items):
         try:
+            if _stock_comparison_prefix(item) != prefix:
+                continue
+            if target_sig is None:
+                target_sig = _stock_signature(normalized)
             sig = _stock_signature(item)
         except Exception:
             sig = None
-        if sig == target_sig:
+        if sig is not None and sig == target_sig:
             return i
     return -1
 
