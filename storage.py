@@ -2,7 +2,7 @@
 # ファイル名：storage.py
 # 00漫画用Camera Position Manager
 # 機能：保存データとパス解決の共通処理
-# 変更点（1.203）:
+# 変更点（1.210）:
 # - JSON形式検証、比較の事前絞込、ストック単位の高速JSON書込
 
 import json

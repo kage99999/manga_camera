@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.203）:
-# - ポーズ優先チェック下の常設説明枠を削除
+# 変更点（1.210）:
+# - 記録・読込のスロット選択、設定内の保存先と個別/全体入出力
 
 import bpy
+from . import fisheye
+from . import slots
 
 from .core import (
     get_camera_data_manager,
@@ -233,7 +235,7 @@ def _draw_lens_control(layout, context, camera):
     layout.label(text="焦点距離")
     lens_row = layout.row()
     dz = get_dolly_props(context.scene)
-    if dz is not None and dz.enabled:
+    if (dz is not None and dz.enabled) or fisheye.managed_dolly(context.scene):
         lens_row.enabled = False
     if camera and getattr(camera, "data", None):
         lens_row.prop(camera.data, 'lens', text="mm")
@@ -314,15 +316,21 @@ def _draw_record_read_controls(layout, context):
     row.operator("camera.load_background_image", text="現在のカメラへ下絵を読込")
     row.operator("camera.reload_background_image", text="再読込")
 
+    slots.draw_selector(layout, context)
+
     total = len(manager.saved_camera_data)
     if total > 0:
-        layout.label(text="下絵のファイル名")
+        row = layout.row(align=True)
+        label = row.row(align=True)
+        label.alignment = 'LEFT'
+        label.label(text="下絵ﾌｧｲﾙ名")
+        field = row.row(align=True)
         ensure_valid_saved_enum(scene, manager)
         try:
-            layout.prop(scene, 'saved_camera_index', text="")
+            field.prop(scene, 'saved_camera_index', text="")
         except Exception:
             rebuild_enum_cache(manager)
-            layout.prop(scene, 'saved_camera_index', text="")
+            field.prop(scene, 'saved_camera_index', text="")
 
         current_data = _get_saved_item_safe(manager, _safe_saved_index(scene, manager), default={}) or {}
         _draw_saved_data_status_labels(layout, current_data)
@@ -990,7 +998,10 @@ def _draw_dolly_controls(layout, context):
         return
 
     row = layout.row(align=True)
+    row.enabled = not fisheye.managed_dolly(context.scene)
     row.prop(dz, "enabled", text="有効", toggle=True)
+    if fisheye.managed_dolly(context.scene):
+        layout.label(text="魚眼側の「元のカメラへ戻す」で解除", icon='INFO')
     layout.prop(dz, "target_obj", text="ターゲット")
 
     row = layout.row(align=True)
@@ -1048,9 +1059,13 @@ def _draw_misc_controls(layout, context):
     row.prop(scene, "show_settings", toggle=True, text="設定")
     if scene.show_settings:
         box = layout.box()
+        slots.draw_folder(box)
+        box.separator()
         box.operator("camera.reset_saved_data", text="記録データの初期化")
-        box.operator("camera.save_stock_data", text="ストックデータを保存")
-        box.operator("camera.load_stock_data", text="ストックデータを読込む")
+        box.operator("camera.save_stock_data", text="選択スロットを書出し")
+        box.operator("camera.load_stock_data", text="スロットを読込む")
+        box.operator("camera.export_all_stock_slots", text="全スロットを書出し")
+        box.operator("camera.import_all_stock_slots", text="全スロットを読込む")
         box.operator("camera.append_stock_data", text="ストックデータ追加読込")
         box.operator("camera.set_output_folder", text="出力フォルダを指定")
         box.operator("camera.set_background_image_folder", text="読込場所を設定")
@@ -1146,6 +1161,19 @@ class VIEW3D_PT_custom_panel_background(bpy.types.Panel):
         _draw_background_controls(self.layout, context)
 
 
+class VIEW3D_PT_custom_panel_fisheye(bpy.types.Panel):
+    bl_label = "魚眼カメラ v0.1.21"
+    bl_idname = "VIEW3D_PT_custom_panel_fisheye"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "カメラ"
+    bl_options = {'DEFAULT_CLOSED'}
+    bl_order = 45
+
+    def draw(self, context):
+        fisheye.draw(self.layout, context)
+
+
 class VIEW3D_PT_custom_panel_dolly(bpy.types.Panel):
     bl_label = "ドリーズーム"
     bl_idname = "VIEW3D_PT_custom_panel_dolly"
@@ -1200,6 +1228,7 @@ UI_CLASSES = (
     VIEW3D_PT_custom_panel_image_cycle,
     VIEW3D_PT_custom_panel_background,
     VIEW3D_PT_custom_panel_dolly,
+    VIEW3D_PT_custom_panel_fisheye,
     VIEW3D_PT_custom_panel_misc,
     VIEW3D_PT_custom_panel_xmp_rendering,
 )
@@ -1295,5 +1324,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.203
+# Version Footer: 1.210
 # -------------------------------

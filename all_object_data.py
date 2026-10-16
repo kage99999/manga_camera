@@ -2,14 +2,15 @@
 # ファイル名：all_object_data.py
 # 00漫画用Camera Position Manager
 # 機能：全オブジェクト位置・回転・スケールの専用ストック管理
-# 変更点（1.203）:
-# - JSON形式を検証し、読込失敗時は現在データと保存先を維持
+# 変更点（1.210）:
+# - 魚眼ドリーの実位置を記録し、読込前に対象カメラのドリーを解除
 
 import os
 import time
 from datetime import datetime
 
 import bpy
+from . import fisheye
 from .transforms import capture_rotation, normalize_rotation, apply_rotation, rotation_signature
 
 from .storage import (
@@ -128,7 +129,7 @@ def _build_current_stock_item(scene) -> dict:
     for obj in sorted(bpy.data.objects, key=lambda item: item.name.casefold()):
         objects.append({
             "name": str(obj.name),
-            "location": list(obj.location),
+            "location": fisheye.object_location(obj),
             **capture_rotation(obj),
             "scale": list(obj.scale),
         })
@@ -256,6 +257,8 @@ def _apply_stock_item(stock_item: dict) -> int:
         obj = bpy.data.objects.get(obj_data.get("name", ""))
         if obj is None:
             continue
+        if obj.type == 'CAMERA':
+            fisheye.release_for_camera_write(obj, preserve_lens=True)
         try:
             obj.location = obj_data.get("location", list(obj.location))
             apply_rotation(obj, obj_data)
@@ -584,5 +587,5 @@ def unregister_all_object_data():
 
 # -------------------------------
 # ファイル名：all_object_data.py
-# Version Footer: 1.203
+# Version Footer: 1.210
 # -------------------------------

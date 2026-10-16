@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ファイル名：xmp_rendering.py
 # 00漫画用Camera Position Manager
-# 変更点（1.203）:
-# - Quaternion/Axis Angleカメラの有効な回転値をXMPへ反映
+# 変更点（1.210）:
+# - 魚眼ドリーで表示されている位置と焦点距離をXMPへ反映
 
 import bpy
 from bpy.app.handlers import persistent
@@ -19,12 +19,13 @@ from .core import (
     get_camera_data_manager,
 )
 from .storage import _atomic_writer
+from . import fisheye
 
 
 # =========================
 # 定数
 # =========================
-ADDON_VERSION_STR = "1.203"
+ADDON_VERSION_STR = "1.210"
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _XMP_KEYWORD = "XML:com.adobe.xmp"
 _RENDER_OPERATOR_ID = "camera.render_with_xmp"
@@ -56,7 +57,8 @@ def _format_xyz_values(values, *, degrees=False):
 
 def _camera_metadata_values(camera, scene=None):
     """カメラとシーンからXMPへ保存する値を取り出す"""
-    location_text = _format_xyz_values(getattr(camera, "location", (0.0, 0.0, 0.0)), degrees=False)
+    location, focal_length = fisheye.camera_values(camera, scene)
+    location_text = _format_xyz_values(location, degrees=False)
 
     rotation_values = []
     try:
@@ -74,10 +76,6 @@ def _camera_metadata_values(camera, scene=None):
         rotation_values = [0.0, 0.0, 0.0]
     rotation_text = _format_xyz_values(rotation_values, degrees=True)
 
-    try:
-        focal_length = float(getattr(getattr(camera, "data", None), "lens", 0.0) or 0.0)
-    except Exception:
-        focal_length = 0.0
     focal_35mm = int(round(focal_length))
     try:
         frame_number = int(getattr(scene, "frame_current", 0) or 0) if scene is not None else 0
@@ -571,5 +569,5 @@ def unregister_xmp_rendering():
 
 # -------------------------------
 # ファイル名：xmp_rendering.py
-# Version Footer: 1.203
+# Version Footer: 1.210
 # -------------------------------

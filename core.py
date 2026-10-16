@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.203）:
-# - JSON読込の失敗時保護とストック再適用の重複解消
+# 変更点（1.210）:
+# - スロット保存先とバックアップの分離、一覧だけの安全な切替
 
 import bpy
+from . import fisheye
+from . import slot_store
 import os
 import sys
 import time
@@ -63,7 +65,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 203)  # 1.203
+    v = (1, 0, 210)  # 1.210
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -275,6 +277,7 @@ def _apply_saved_camera_data(scene, camera, manager, data) -> None:
     if not scene or not _is_valid_camera_object(camera):
         return
 
+    fisheye.release_for_camera_write(camera)
     display_state = _capture_background_display_state(camera)
     fr = _saved_value(data, 'frame_current', None)
     if fr is not None:
@@ -608,6 +611,7 @@ class CameraPositionManagerPreferences(bpy.types.AddonPreferences):
 # =========================
 class CameraDataManager:
     def __init__(self):
+        self.slot_library = None
         home_dir = os.path.expanduser("~")
         self.saved_camera_data = []
         self.output_folder_path = _safe_existing_dirpath(home_dir, fallback=home_dir)
@@ -619,11 +623,24 @@ class CameraDataManager:
         target_path = _safe_json_path(filepath or self.save_file_path)
         _check_stock_save_target(self, target_path, filepath)
         home_dir = os.path.expanduser("~")
+        store = self.slot_library
         data = {
-            'camera_data': _normalize_saved_list(self.saved_camera_data if camera_data is None else camera_data),
-            'output_folder_path': _safe_existing_dirpath(self.output_folder_path if output_folder_path is None else output_folder_path, fallback=home_dir),
-            'background_image_folder_path': _safe_existing_dirpath(self.background_image_folder_path if background_image_folder_path is None else background_image_folder_path, fallback=home_dir),
+            'camera_data': self.saved_camera_data if camera_data is None else camera_data,
+            'output_folder_path': self.output_folder_path if output_folder_path is None else output_folder_path,
+            'background_image_folder_path': self.background_image_folder_path if background_image_folder_path is None else background_image_folder_path,
         }
+        if store is not None:
+            # A slot's offline image/output directories must not fall back to HOME.
+            data = slot_store._payload(data)
+            if filepath:
+                store.export_json(target_path, data)
+                return
+            store.check_write()
+            target_path = store._path(store.active)
+        else:
+            data['camera_data'] = _normalize_saved_list(data['camera_data'])
+            for key in ('output_folder_path', 'background_image_folder_path'):
+                data[key] = _safe_existing_dirpath(data[key], fallback=home_dir)
         _write_json_atomic(target_path, data)
         self.saved_camera_data = data['camera_data']
         self._normalized_saved_data = self.saved_camera_data
@@ -631,8 +648,16 @@ class CameraDataManager:
         self.background_image_folder_path = data['background_image_folder_path']
         self.save_file_path = target_path
         self._blocked_save_path = None
+        if store is not None:
+            store.did_save()
 
     def load_data(self, filepath=None, *, create_if_missing=False):
+        if self.slot_library is not None:
+            if filepath:
+                self.slot_library.import_json(filepath)
+            else:
+                self.slot_library.reload()
+            return
         target_path = _safe_json_path(filepath or self.save_file_path)
         home_dir = os.path.expanduser("~")
         try:
@@ -832,12 +857,13 @@ def _build_current_camera_saved_item(scene, camera) -> dict:
         selected_objects = [capture_object_record(obj, bpy.context)
                             for obj in recording_objects(bpy.context, camera)]
 
+    position, lens = fisheye.camera_values(camera, scene)
     return {
-        'position': list(camera.location),
+        'position': position,
         **capture_rotation(camera),
         'resolution_x': scene.render.resolution_x,
         'resolution_y': scene.render.resolution_y,
-        'focal_length': camera.data.lens,
+        'focal_length': lens,
         'bg_image': bg_image,
         'bg_opacity': bg_opacity,
         'bg_depth': bg_depth,
@@ -1609,8 +1635,11 @@ class OBJECT_OT_reset_saved_data(bpy.types.Operator):
 
 class OBJECT_OT_save_stock_data(bpy.types.Operator):
     bl_idname = "camera.save_stock_data"
-    bl_label = "ストックデータを保存"
+    bl_label = "選択スロットを書出し"
+    bl_description = "選択中スロットをJSONへ書き出します。スロットの自動保存先は変更しません"
     filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filter_glob: bpy.props.StringProperty(default="*.json", options={'HIDDEN'})
+    check_existing: bpy.props.BoolProperty(default=True, options={'HIDDEN'})
     def execute(self, context):
         manager = get_camera_data_manager()
         filepath = _safe_json_path(self.filepath)
@@ -1620,14 +1649,18 @@ class OBJECT_OT_save_stock_data(bpy.types.Operator):
         return {'FINISHED'}
     def invoke(self, context, event):
         manager = get_camera_data_manager()
-        self.filepath = _default_json_dialog_filepath(manager)
+        store = manager.slot_library
+        self.filepath = (os.path.join(manager.output_folder_path, store.active['file'])
+                         if store is not None and store.active else _default_json_dialog_filepath(manager))
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
 class OBJECT_OT_load_stock_data(bpy.types.Operator):
     bl_idname = "camera.load_stock_data"
-    bl_label = "ストックデータを読込む"
+    bl_label = "スロットを読込む"
+    bl_description = "JSONを新しいスロットとして追加します。同名は別名で追加し、カメラ等は動かしません"
     filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filter_glob: bpy.props.StringProperty(default="*.json", options={'HIDDEN'})
     def execute(self, context):
         manager = get_camera_data_manager()
         filepath = _safe_json_path(self.filepath)
@@ -1638,7 +1671,11 @@ class OBJECT_OT_load_stock_data(bpy.types.Operator):
             return {'CANCELLED'}
         rebuild_enum_cache(manager)
         scene = context.scene
-        _set_saved_camera_index_safe(scene, manager, 0)
+        if manager.slot_library is not None:
+            from .slots import refresh_ui
+            refresh_ui(context)
+        else:
+            _set_saved_camera_index_safe(scene, manager, 0)
         self.report({'INFO'}, f"ストックデータを読込しました: {filepath}")
         return {'FINISHED'}
     def invoke(self, context, event):
@@ -1983,6 +2020,8 @@ def _apply_camera_view(context):
             break
 
 def update_saved_camera_index(self, context):
+    if _SAVED_STOCK_APPLY_SUSPENDED:
+        return
     scene = context.scene
     camera = _get_valid_scene_camera(scene, repair=True)
     manager = get_camera_data_manager()
@@ -2184,12 +2223,16 @@ def _on_load_post(dummy):
     def _deferred_fix():
         global _POSTLOAD_FIX_PENDING
         try:
+            if manager.slot_library is not None:
+                from .slots import refresh_ui
+                refresh_ui()
+                return None
             saved_items = _ensure_manager_saved_data_normalized(manager)
             if saved_items:
                 valid = {str(i) for i in range(len(saved_items))}
                 for sc in bpy.data.scenes:
                     if getattr(sc, "saved_camera_index", None) not in valid:
-                        _set_saved_camera_index_safe(sc, manager, 0)
+                        _set_saved_camera_index_safe(sc, manager, 0, apply_saved_data=manager.slot_library is None)
         except Exception:
             return 0.2
         finally:
@@ -2483,19 +2526,23 @@ def register_core():
         bpy.utils.register_class(cls)
 
     manager = get_camera_data_manager()
-    _load_initial_stock_data(manager)
+    slot_store.initialize(manager)
     rebuild_enum_cache(manager)
 
     _ensure_core_handlers_registered()
 
     saved_items = _ensure_manager_saved_data_normalized(manager)
-    if saved_items:
+    if saved_items or manager.slot_library is not None:
         def _deferred_fix():
             try:
+                if manager.slot_library is not None:
+                    from .slots import refresh_ui
+                    refresh_ui()
+                    return None
                 valid = {str(i) for i in range(len(saved_items))}
                 for sc in bpy.data.scenes:
                     if getattr(sc, "saved_camera_index", None) not in valid:
-                        _set_saved_camera_index_safe(sc, manager, 0)
+                        _set_saved_camera_index_safe(sc, manager, 0, apply_saved_data=manager.slot_library is None)
             except Exception:
                 return 0.2
             return None
@@ -2541,5 +2588,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.203
+# Version Footer: 1.210
 # -------------------------------

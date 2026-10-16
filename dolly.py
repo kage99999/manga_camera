@@ -6,9 +6,8 @@
 # - 「有効」ON中、カメラ移動に合わせてレンズを自動調整し、ターゲットの見かけサイズを一定に保つ
 # - UIは「焦点距離」の直下に配置（ui.py側）
 # - 依頼により「基準をキャプチャ」ボタンと「オートキー（レンズ）」はUIに出さない
-# 変更点（1.203）:
-# - バージョン表記同期
-# - ファイル読込後と他シーンでの無効化後も更新ハンドラーを維持
+# 変更点（1.210）:
+# - 魚眼ドリーとの同時制御を防止、更新先をプロパティ所有シーンへ統一
 
 import bpy
 import mathutils
@@ -359,6 +358,12 @@ def _depsgraph_handler(scene, depsgraph):
     if not props.enabled:
         return
 
+    from .fisheye import managed_dolly
+    if managed_dolly(scene):
+        # Saved/Undo states can bypass the property callback. Only one owner.
+        props.enabled = False
+        return
+
     cam = scene.camera
     if cam is None or getattr(cam, "type", "") != "CAMERA" or not getattr(cam, "data", None):
         return
@@ -407,13 +412,17 @@ def _ensure_handler_unregistered():
 
 def _on_enabled_update(self, context):
     # enabled をONにした瞬間、基準を取り直す
-    scene = getattr(context, "scene", None)
+    scene = self.id_data
     if scene is None:
         return
     cam = scene.camera
     tgt = self.target_obj
 
     if self.enabled:
+        from .fisheye import managed_dolly
+        if managed_dolly(scene):
+            self.enabled = False
+            return
         _ensure_handler_registered()
         if cam is not None and getattr(cam, "type", "") == "CAMERA" and tgt is not None:
             _capture_baseline(scene, cam, tgt)
@@ -624,5 +633,5 @@ def unregister_dolly():
 
 # -------------------------------
 # ファイル名：dolly.py
-# Version Footer: 1.203
+# Version Footer: 1.210
 # -------------------------------

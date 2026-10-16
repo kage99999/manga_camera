@@ -2,7 +2,7 @@
 # ファイル名：lattice_stock.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション ストック保存/復元
-# 変更点（1.203）:
+# 変更点（1.210）:
 # - ストックの全プロパティ復元後に一度だけ実効状態を反映
 
 from . import lattice_manager as _lm
@@ -109,5 +109,5 @@ __all__ = ["export_lattice_stock_state", "apply_lattice_stock_state"]
 
 # -------------------------------
 # ファイル名：lattice_stock.py
-# Version Footer: 1.203
+# Version Footer: 1.210
 # -------------------------------

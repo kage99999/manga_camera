@@ -74,11 +74,16 @@ class Regression(unittest.TestCase):
         c._CAMERA_DATA_MANAGER.save_file_path = str(cls.folder / 'camera.json')
         a._ALL_OBJECT_DATA_MANAGER = a.AllObjectDataManager()
         a._ALL_OBJECT_DATA_MANAGER.save_file_path = str(cls.folder / 'all.json')
+        # Legacy stock tests deliberately exercise the pre-slot manager API.
+        # Full persistent-library registration is covered by blender_slot_regression.
+        cls.slot_init_patch = patch.object(c.slot_store, 'initialize', side_effect=s._load_initial_stock_data)
+        cls.slot_init_patch.start()
         addon.register()
 
     @classmethod
     def tearDownClass(cls):
         addon.unregister()
+        cls.slot_init_patch.stop()
         assert cls.folder.resolve().parent == (ROOT / 'dist').resolve()
         assert cls.folder.name.startswith('manga-camera-tests-')
         shutil.rmtree(cls.folder)
