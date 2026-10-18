@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.210）:
-# - スロット名の直接編集を維持して一体型表示へ調整し、ラベル右側の余白を縮小
+# 変更点（1.214）:
+# - ビューレイヤー復元の再評価で保存ポーズがキーへ戻る問題を修正
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 210),
+    "version": (1, 0, 214),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -56,5 +56,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.210
+# Version Footer: 1.214
 # -------------------------------

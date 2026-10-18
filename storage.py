@@ -2,7 +2,7 @@
 # ファイル名：storage.py
 # 00漫画用Camera Position Manager
 # 機能：保存データとパス解決の共通処理
-# 変更点（1.210）:
+# 変更点（1.214）:
 # - JSON形式検証、比較の事前絞込、ストック単位の高速JSON書込
 
 import json
@@ -15,6 +15,7 @@ from datetime import datetime
 import bpy
 from .transforms import normalize_rotation, rotation_signature
 from .pose_stock import normalize_pose_fields, pose_signature
+from . import fisheye_stock
 
 _ENUM_CACHE: list[tuple[str, str, str]] = []
 
@@ -297,6 +298,7 @@ def _stock_signature(item: dict) -> tuple:
         tuple(selected_objects),
         bool(item.get("lattice_enabled", False)),
         _lattice_state_signature(item.get("lattice_state")),
+        fisheye_stock.signature(item.get('fisheye_state')),
         bool(item.get("record_view_layer_exclude_state", False)),
         _view_layer_exclude_state_signature(item.get("view_layer_exclude_state")),
     )
@@ -350,6 +352,10 @@ def _normalize_saved_item(item) -> dict:
         'view_layer_exclude_state': _normalize_view_layer_exclude_state(item.get('view_layer_exclude_state')),
     }
     selected_objects = item.get('selected_objects', [])
+    if 'fisheye_state' in item:
+        out['fisheye_state'] = fisheye_stock.normalize(item['fisheye_state'])
+        if out['fisheye_state']['enabled'] and (out['lattice_enabled'] or out['lattice_state']['lattice_enabled']):
+            raise ValueError('魚眼とラティスの同時記録は読み込めません')
     if isinstance(selected_objects, list):
         for obj in selected_objects:
             if not isinstance(obj, dict):
@@ -371,6 +377,10 @@ def _normalize_saved_list(items) -> list:
         return []
     normalized = []
     for item in items:
+        if isinstance(item, dict) and 'fisheye_state' in item:
+            # Never turn a damaged deformation record into an unrelated default camera.
+            normalized.append(_normalize_saved_item(item))
+            continue
         try:
             normalized.append(_normalize_saved_item(item))
         except Exception:

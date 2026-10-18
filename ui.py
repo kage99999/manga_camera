@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.210）:
+# 変更点（1.214）:
 # - 記録・読込のスロット選択、設定内の保存先と個別/全体入出力
 
 import bpy
@@ -408,6 +408,7 @@ def _draw_saved_data_status_labels(layout, current_data):
     has_obj = _saved_data_has_recorded_objects(current_data)
     has_memo = _saved_data_has_memo(current_data)
     has_lattice = _saved_data_has_lattice_enabled(current_data)
+    has_fisheye = bool(isinstance(current_data, dict) and current_data.get('fisheye_state', {}).get('enabled'))
     has_view_layer = _saved_data_has_view_layer_state(current_data)
 
     prefix_row = layout.row(align=True)
@@ -419,7 +420,7 @@ def _draw_saved_data_status_labels(layout, current_data):
     left1 = split1.row(align=True)
     right1 = split1.row(align=True)
     _draw_additional_data_status_badge(left1, "OBJデータ", has_obj)
-    _draw_additional_data_status_badge(right1, "ラティス", has_lattice)
+    _draw_additional_data_status_badge(right1, "魚眼" if has_fisheye else "ラティス" if has_lattice else "魚眼・ラティス", has_fisheye or has_lattice)
 
     row2 = layout.row(align=True)
     split2 = row2.split(factor=0.5, align=True)
@@ -1324,5 +1325,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.210
+# Version Footer: 1.214
 # -------------------------------

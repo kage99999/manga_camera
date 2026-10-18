@@ -2,7 +2,7 @@
 # ファイル名：background.py
 # 00漫画用Camera Position Manager
 # 機能：下絵画像と背景表示の共通処理
-# 変更点（1.210）:
+# 変更点（1.214）:
 # - 記録済み画像を除外しても現在画像からの送り方向を維持
 
 import os
@@ -199,6 +199,14 @@ def _apply_saved_background_to_camera(camera, manager, data, *, display_state=No
     _set_background_visibility(camera, bg, visible)
 
 
+def _remember_background_image_folder(manager, filepath: str) -> None:
+    path = bpy.path.native_pathsep(bpy.path.abspath(filepath))
+    folder = _safe_existing_dirpath(os.path.dirname(path), fallback=manager.background_image_folder_path)
+    previous = bpy.path.native_pathsep(bpy.path.abspath(manager.background_image_folder_path))
+    if os.path.normcase(os.path.normpath(folder)) != os.path.normcase(os.path.normpath(previous)):
+        manager.save_data(background_image_folder_path=folder)
+
+
 def _set_background_image_from_path(scene, camera, manager, filepath: str, redraw_callback, update_resolution: bool = False, update_frame: bool = False):
     if not scene or not camera or not getattr(camera, 'data', None):
         raise RuntimeError('カメラがありません')
@@ -228,9 +236,7 @@ def _set_background_image_from_path(scene, camera, manager, filepath: str, redra
                 scene.frame_set(int(fnum))
         except Exception:
             pass
-    folder = _safe_existing_dirpath(os.path.dirname(filepath), fallback=manager.background_image_folder_path)
-    if folder != manager.background_image_folder_path:
-        manager.save_data(background_image_folder_path=folder)
+    _remember_background_image_folder(manager, filepath)
     redraw_callback()
     return image
 

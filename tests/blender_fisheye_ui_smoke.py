@@ -32,6 +32,8 @@ bpy.context.preferences.view.show_splash = False
 engine = base.addon.gyogan_camera
 obj = bpy.data.objects['Cube']
 scene = bpy.context.scene
+scene.mpm_lattice_management_enabled = False
+scene.gyogan.enabled = True
 scene.gyogan.subdivision = 'SIMPLE'
 engine.setup_mesh(scene, obj)
 

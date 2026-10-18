@@ -32,6 +32,7 @@ for cls in panels:
 t.PoseRegression.setUpClass()
 case = t.PoseRegression()
 case.setUp()
+case.scene.record_view_layer_exclude_state = True
 case.rig.pose.bones['Euler'].location.x = 1
 for area in bpy.context.screen.areas:
     if area.type == 'VIEW_3D':

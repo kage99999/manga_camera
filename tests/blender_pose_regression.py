@@ -412,6 +412,68 @@ class PoseRegression(unittest.TestCase):
         self.assertEqual(self.scene.frame_current, 100)
         self.assertEqual(self.rig.pose.bones['Euler'].location.x, 6)
 
+    def test_view_layer_restore_keeps_stock_pose_after_graph_evaluation(self):
+        collection = bpy.data.collections.new('PoseVisibility')
+        self.scene.collection.children.link(collection)
+        collection.objects.link(self.rig)
+        self.scene.collection.objects.unlink(self.rig)
+        layer = bpy.context.view_layer.layer_collection.children[collection.name]
+        try:
+            bone = self.rig.pose.bones['Euler']
+            bone.location.x = 13
+            bone.keyframe_insert('location', frame=100)
+            keys = self.points()
+            self.scene.record_view_layer_exclude_state = True
+            self.scene.mpm_pose_keyframe_priority = True
+            bone.location.x = 15
+            self.save()
+            saved = self.manager.saved_camera_data[0]
+            for priority, expected in ((False, 15), (True, 13)):
+                for was_excluded in (False, True):
+                    with self.subTest(priority=priority, excluded=was_excluded):
+                        self.scene.mpm_pose_keyframe_priority = priority
+                        layer.exclude = was_excluded
+                        self.scene.frame_set(777)
+                        c._apply_saved_camera_data(self.scene, self.camera, self.manager, saved)
+                        bpy.context.view_layer.update()
+                        evaluated = self.rig.evaluated_get(bpy.context.evaluated_depsgraph_get())
+                        self.assertFalse(layer.exclude)
+                        self.assertAlmostEqual(bone.location.x, expected)
+                        self.assertAlmostEqual(evaluated.pose.bones['Euler'].matrix.translation.x, expected)
+                        self.assertEqual(self.points(), keys)
+                        self.assertEqual(self.scene.frame_current, 100)
+        finally:
+            self.scene.collection.objects.link(self.rig)
+            bpy.data.collections.remove(collection)
+
+    def test_unchanged_view_layer_excludes_do_not_trigger_animation_evaluation(self):
+        bone = self.rig.pose.bones['Euler']
+        bone.location.x = 13
+        bone.keyframe_insert('location', frame=100)
+        self.scene.record_view_layer_exclude_state = True
+        saved = self.item()
+        bpy.context.view_layer.update()
+        bone.location.x = 15
+        c._apply_saved_view_layer_exclude_state(saved)
+        bpy.context.view_layer.update()
+        self.assertAlmostEqual(bone.location.x, 15)
+
+    def test_view_layer_restore_reapplies_multiple_recorded_armature_poses(self):
+        other = self.make_rig('SecondPoseRig')
+        self.rig.select_set(True)
+        bones = (self.rig.pose.bones['Euler'], other.pose.bones['Euler'])
+        self.scene.record_view_layer_exclude_state = True
+        for index, bone in enumerate(bones):
+            bone.location.x = index + 1
+            bone.keyframe_insert('location', frame=100)
+            bone.location.x = index + 10
+        keys = (self.points(), self.points(other))
+        self.save()
+        c._apply_saved_camera_data(self.scene, self.camera, self.manager, self.manager.saved_camera_data[0])
+        bpy.context.view_layer.update()
+        self.assertEqual([bone.location.x for bone in bones], [10, 11])
+        self.assertEqual((self.points(), self.points(other)), keys)
+
     def test_key_priority_and_partial_pose_restore_without_notice(self):
         self.scene.mpm_pose_keyframe_priority = True
         bone = self.rig.pose.bones['Euler']

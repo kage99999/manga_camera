@@ -39,6 +39,8 @@ with patch.object(addon.core.CameraDataManager, 'load_data'), patch.object(
         addon.all_object_data.AllObjectDataManager, 'load_data'), patch.object(addon.core.slot_store, 'initialize'):
     addon.register()
     assert addon.core.ADDON_VERSION_STR == label
+    assert addon.slots.MPM_OT_restore_stock_slot.is_registered
+    assert addon.slots.MPM_UL_deleted_stock_slots.is_registered
     assert addon.xmp_rendering.ADDON_VERSION_STR == label
     assert label in addon.ui.VIEW3D_PT_custom_panel.bl_label
     assert not hasattr(bpy.types.Scene, 'mpm_record_keyframes')
@@ -49,6 +51,8 @@ with patch.object(addon.core.CameraDataManager, 'load_data'), patch.object(
         assert addon.gyogan_camera.__file__.startswith(str(path))
         assert not bpy.types.Panel.bl_rna_get_subclass_py('GYOGAN_PT_main')
     addon.unregister()
+    assert not addon.slots.MPM_OT_restore_stock_slot.is_registered
+    assert not addon.slots.MPM_PG_deleted_stock_slot.is_registered
     assert not hasattr(bpy.types.Scene, 'record_selected_objects')
     assert not hasattr(bpy.types.Scene, 'mpm_pose_keyframe_priority')
     assert not hasattr(bpy.types.Scene, 'gyogan')

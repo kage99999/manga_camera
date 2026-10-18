@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Manga Camera 1.210: persistent camera-stock libraries, independent of .blend.
+# Manga Camera 1.214: persistent camera-stock libraries, independent of .blend.
 
 import copy
 import json
@@ -95,6 +95,13 @@ def _new_json(path, data):
     except Exception:
         os.unlink(path)
         raise
+
+
+def _deleted_name(filename):
+    match = re.fullmatch(r'[0-9a-f]{32}_(.+)\.json', filename)
+    if not match:
+        raise ValueError('削除スロットのファイル名が正しくありません')
+    return _name(match[1])
 
 
 class SlotLibrary:
@@ -404,6 +411,51 @@ class SlotLibrary:
             # Catalog deletion has committed; retain the extra copy rather than lose data.
             print(f'スロット削除済み。元JSONの削除は保留しました: {exc}')
 
+    def _trash_path(self, filename):
+        _deleted_name(filename)
+        root = os.path.realpath(self.folder)
+        trash = os.path.join(root, '.trash')
+        path = os.path.join(trash, filename)
+        if (os.path.islink(trash) or os.path.realpath(trash) != trash
+                or os.path.islink(path) or os.path.dirname(os.path.realpath(path)) != trash):
+            raise ValueError('退避先の外部を指すJSONは復元できません')
+        return path
+
+    def deleted_slots(self):
+        self._check_catalog()
+        # Check containment even when the directory is empty; never follow links.
+        trash = os.path.dirname(self._trash_path('0' * 32 + '_check.json'))
+        result = []
+        try:
+            entries = os.scandir(trash)
+        except FileNotFoundError:
+            return result
+        with entries:
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                try:
+                    name = _deleted_name(entry.name)
+                    path = self._trash_path(entry.name)
+                except ValueError:
+                    continue
+                stamp = _stamp(path)
+                result.append({'file': entry.name, 'name': name, 'stamp': stamp})
+        return sorted(result, key=lambda item: (item['stamp'][0], item['file']), reverse=True)
+
+    def restore_deleted(self, filename, *, expected_stamp=None):
+        self._check_catalog()
+        path = self._trash_path(filename)
+        before = _stamp(path)
+        if expected_stamp is not None and tuple(expected_stamp) != before:
+            raise ValueError('退避JSONが変更されました。復元の一覧を開き直してください')
+        data = _payload(_read_stock_json(path, 'camera_data'))
+        if _stamp(path) != before:
+            raise ValueError('読込中に退避JSONが変更されました。もう一度やり直してください')
+        # Reuse the atomic import path; keep the backup, including on success.
+        self.add([(_deleted_name(filename), data)], unique=True)
+        return self.active['name']
+
     def guard_export(self, path):
         if _same_path(path, self.settings_path):
             raise ValueError('スロット設定ファイルへ書き出せません')
@@ -460,4 +512,4 @@ def initialize(manager):
     return store
 
 
-# Version Footer: 1.210
+# Version Footer: 1.214

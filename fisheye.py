@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Manga Camera 1.210: boundary to the imported Gyogan Camera 0.1.21 engine.
+# Manga Camera 1.214: boundary to the imported Gyogan Camera 0.1.21 engine.
 """Keep the optional fisheye engine isolated from legacy camera workflows."""
 
 import bpy
@@ -12,6 +12,27 @@ _unavailable_reason = ''
 
 def available():
     return _registered
+
+
+def enabled(scene):
+    return bool(_registered and scene and scene.gyogan.enabled)
+
+
+def warn(message):
+    print(message)
+    if not bpy.app.background and getattr(bpy.context, 'window', None):
+        def draw(menu, context):
+            menu.layout.label(text=message)
+        bpy.context.window_manager.popup_menu(draw, title='魚眼・ラティス', icon='ERROR')
+
+
+def reconcile_exclusion(scene):
+    if not enabled(scene) or not getattr(scene, 'mpm_lattice_management_enabled', False):
+        return
+    if scene.mpm_lattice_sets:
+        scene.gyogan.enabled = False
+    else:
+        scene.mpm_lattice_management_enabled = False
 
 
 def managed_dolly(scene):
@@ -124,4 +145,4 @@ def unregister_fisheye():
             _registered = False
     _unavailable_reason = ''
 
-# Version Footer: 1.210
+# Version Footer: 1.214

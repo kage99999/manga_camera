@@ -33,6 +33,7 @@ scene.camera.data.lens = 50
 scene.gyogan.subdivision = 'NONE'
 scene.gyogan.center_mode = 'DEFAULT'
 scene.gyogan.enabled = False
+scene.mpm_lattice_management_enabled = False
 scene.gyogan.mode = kind
 scene.gyogan.effect_scope = 'CAMERA'
 scene.gyogan.keep_bounds_helpers = keep

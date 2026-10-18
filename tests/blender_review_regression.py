@@ -188,6 +188,9 @@ class ReviewRegression(unittest.TestCase):
     def test_lattice_does_not_touch_other_scene(self):
         other = bpy.data.scenes.new('ReviewOtherScene')
         bpy.context.window.scene = other
+        if base.addon.fisheye.available():
+            other.gyogan.enabled = False
+        other.mpm_lattice_management_enabled = True
         helper = base.Regression()
         helper.scene = other
         obj = helper.new_mesh('ReviewOtherMesh')

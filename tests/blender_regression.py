@@ -96,6 +96,9 @@ class Regression(unittest.TestCase):
         self.scene.record_view_layer_exclude_state = False
         self.scene.saved_memo_text = ''
         self.scene.mpm_dolly_props.enabled = False
+        if addon.fisheye.available():
+            self.scene.gyogan.enabled = False
+        self.scene.mpm_lattice_management_enabled = True
         self.manager = c.get_camera_data_manager()
         self.manager.save_file_path = str(self.folder / 'camera.json')
         self.manager.saved_camera_data = []

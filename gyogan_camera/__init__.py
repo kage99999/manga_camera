@@ -254,6 +254,7 @@ def restore_visibility(record, scene):
 
 
 def apply_enabled(scene):
+    _reconcile_embedded_exclusion(scene)
     settings = scene.gyogan
     global_enabled = settings.enabled and cameras.usable(scene, settings.camera)
     changed = False
@@ -319,6 +320,10 @@ def apply_enabled(scene):
 def update_enabled(self, context):
     scene = self.id_data
     if isinstance(scene, bpy.types.Scene):
+        if self.enabled and getattr(scene, 'mpm_lattice_management_enabled', False):
+            self.enabled = False
+            self.status = 'ラティスをOFFにしてから魚眼をONにしてください'
+            return
         apply_enabled(scene)
         targets.request(scene)
 
@@ -768,6 +773,9 @@ class GYOGAN_OT_toggle_preview(Operator):
 
     def execute(self, context):
         scene = context.scene
+        if not scene.gyogan.enabled and getattr(scene, 'mpm_lattice_management_enabled', False):
+            self.report({'WARNING'}, 'ラティスをOFFにしてから魚眼をONにしてください')
+            return {'CANCELLED'}
         scene.gyogan.enabled = not scene.gyogan.enabled
         # Include helpers/temporary rig mode switches in this same Undo step.
         # Prepare offscreen candidates too, before later camera movement.
@@ -996,6 +1004,7 @@ def load_post(_):
         _finish_registration()
     for scene in bpy.data.scenes:
         if hasattr(scene, 'gyogan'):
+            _reconcile_embedded_exclusion(scene)
             migrate_targets(scene)
             presets.ensure(scene)
             dolly.upgrade_saved(scene)
@@ -1015,6 +1024,12 @@ CLASSES = presets.CLASSES + (GYOGAN_Visibility, GYOGAN_Output, GYOGAN_Modifier, 
 _registration_pending = False
 _registered_classes = []
 _registered_modules = []
+
+
+def _reconcile_embedded_exclusion(scene):
+    if hasattr(scene, 'mpm_lattice_management_enabled'):
+        from .. import fisheye
+        fisheye.reconcile_exclusion(scene)
 
 
 def _cancel_registration_timer():
@@ -1038,6 +1053,7 @@ def _finish_registration():
     dolly.initialize_scenes()
     cameras._load_post()
     for scene in bpy.data.scenes:
+        _reconcile_embedded_exclusion(scene)
         migrate_targets(scene)
         presets.ensure(scene)
         upgrade_saved_warps(scene)

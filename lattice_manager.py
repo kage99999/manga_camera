@@ -2,7 +2,7 @@
 # ファイル名：lattice_manager.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション
-# 変更点（1.210）:
+# 変更点（1.214）:
 # - シーン範囲の保護とストック復元時の更新集約
 
 import bpy
@@ -427,6 +427,12 @@ def apply_lattice_management_enabled(scene, enabled):
     if scene is None or _lattice_updates_suspended(scene):
         return 0
     enabled = bool(enabled)
+    from . import fisheye
+    if enabled and fisheye.enabled(scene):
+        with _suspend_lattice_updates(scene):
+            scene.mpm_lattice_management_enabled = False
+        fisheye.warn('魚眼をOFFにしてからラティスをONにしてください')
+        enabled = False
     changed = 0
     for mod in _iter_all_lattice_manager_modifiers(scene):
         if enabled:
@@ -1654,6 +1660,8 @@ LATTICE_MANAGER_CLASSES = (
 def _restore_lattice_state_after_load():
     scene = getattr(bpy.context, 'scene', None)
     if scene is not None and hasattr(scene, 'mpm_lattice_sets'):
+        from . import fisheye
+        fisheye.reconcile_exclusion(scene)
         sets = scene.mpm_lattice_sets
         saved_uid = scene.mpm_lattice_active_set_enum
         for index, lattice_set in enumerate(sets):
@@ -1757,5 +1765,5 @@ def unregister_lattice_manager():
 
 # -------------------------------
 # ファイル名：lattice_manager.py
-# Version Footer: 1.210
+# Version Footer: 1.214
 # -------------------------------

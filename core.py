@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.210）:
-# - スロット保存先とバックアップの分離、一覧だけの安全な切替
+# 変更点（1.214）:
+# - 依存グラフの再評価後に保存ポーズを適用し、不要な除外状態更新を抑制
 
 import bpy
 from . import fisheye
+from . import fisheye_stock
 from . import slot_store
 import os
 import sys
@@ -30,6 +31,7 @@ from .background import (
     _frame_from_filename_path,
     _get_or_create_background_slot,
     _load_image_safe,
+    _remember_background_image_folder,
     _set_background_image_from_path,
     _set_background_visibility,
 )
@@ -65,7 +67,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 210)  # 1.210
+    v = (1, 0, 214)  # 1.214
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -272,11 +274,18 @@ def _focus_timeline_on_current_frame(scene) -> None:
                 print(f"タイムラインの表示位置を更新できませんでした: {exc}")
 
 
-def _apply_saved_camera_data(scene, camera, manager, data) -> None:
+def _apply_saved_camera_data(scene, camera, manager, data):
     """保存1件を安全にカメラへ適用する"""
     if not scene or not _is_valid_camera_object(camera):
         return
 
+    try:
+        fish_plan = fisheye_stock.prepare(scene, camera, data)
+    except Exception as exc:
+        fisheye.warn(f'魚眼記録を読み込めません: {exc}')
+        return False
+    if fish_plan is not None or data.get('lattice_enabled', False):
+        fisheye_stock.disable(scene)
     fisheye.release_for_camera_write(camera)
     display_state = _capture_background_display_state(camera)
     fr = _saved_value(data, 'frame_current', None)
@@ -312,10 +321,11 @@ def _apply_saved_camera_data(scene, camera, manager, data) -> None:
             camera, manager, data if isinstance(data, dict) else {}, display_state=display_state)
     except Exception as e:
         print(f"下絵の読み込み中にエラーが発生しました: {e}")
+    pending_poses = []
     try:
-        _apply_saved_selected_object_data(
+        pending_poses = _apply_saved_selected_object_data(
             data if isinstance(data, dict) else {},
-            prefer_keyframes=scene.mpm_pose_keyframe_priority)
+            prefer_keyframes=scene.mpm_pose_keyframe_priority, defer_pose=True)
     except Exception as e:
         print(f"選択OBJデータの適用中にエラーが発生しました: {e}")
     try:
@@ -326,18 +336,37 @@ def _apply_saved_camera_data(scene, camera, manager, data) -> None:
         _apply_saved_view_layer_exclude_state(data if isinstance(data, dict) else {})
     except Exception as e:
         print(f"ビューレイヤー除外状態の適用中にエラーが発生しました: {e}")
+    try:
+        fisheye_stock.apply(scene, camera, fish_plan)
+    except Exception as exc:
+        fisheye_stock.disable(scene)
+        fisheye.warn(f'魚眼の復元を停止しました: {exc}')
+        return False
+    if pending_poses:
+        # Collection/visibility changes rebuild the graph and reevaluate Actions.
+        # Finish that evaluation before restoring unkeyed poses, once for all rigs.
+        try:
+            bpy.context.view_layer.update()
+            for record in pending_poses:
+                obj = bpy.data.objects.get(record['name'])
+                if obj is not None:
+                    apply_pose_record(obj, record, prefer_keyframes=scene.mpm_pose_keyframe_priority)
+        except Exception as exc:
+            print(f'ポーズの適用中にエラーが発生しました: {exc}')
     if fr is not None:
         _focus_timeline_on_current_frame(scene)
+    return True
 
 
-def _apply_saved_selected_object_data(data, *, prefer_keyframes=True) -> None:
+def _apply_saved_selected_object_data(data, *, prefer_keyframes=True, defer_pose=False):
+    pending_poses = []
     if not isinstance(data, dict):
-        return
+        return pending_poses
     if not bool(data.get('record_selected_objects', False)):
-        return
+        return pending_poses
     selected_objects = data.get('selected_objects', [])
     if not isinstance(selected_objects, list):
-        return
+        return pending_poses
     for obj_data in selected_objects:
         if not isinstance(obj_data, dict):
             continue
@@ -359,7 +388,12 @@ def _apply_saved_selected_object_data(data, *, prefer_keyframes=True) -> None:
             obj.scale = obj_data.get('scale', list(obj.scale))
         except Exception:
             pass
-        apply_pose_record(obj, obj_data, prefer_keyframes=prefer_keyframes)
+        if defer_pose:
+            if obj.type == 'ARMATURE' and obj_data.get('pose_bones'):
+                pending_poses.append(obj_data)
+        else:
+            apply_pose_record(obj, obj_data, prefer_keyframes=prefer_keyframes)
+    return pending_poses
 
 
 
@@ -451,7 +485,9 @@ def _apply_saved_view_layer_exclude_state(data) -> None:
         if layer_collection is None:
             continue
         try:
-            layer_collection.exclude = bool(item.get("exclude", False))
+            excluded = bool(item.get("exclude", False))
+            if layer_collection.exclude != excluded:
+                layer_collection.exclude = excluded
         except Exception:
             # ルートなど、excludeを書き換えられないものは無視する。
             pass
@@ -777,7 +813,9 @@ class OBJECT_OT_recall_camera_position(bpy.types.Operator):
             return {'CANCELLED'}
         latest_index = len(saved_items) - 1
         data = saved_items[latest_index]
-        _apply_saved_camera_data(scene, camera, manager, data)
+        if _apply_saved_camera_data(scene, camera, manager, data) is False:
+            self.report({'WARNING'}, 'ストックの読込を中止しました')
+            return {'CANCELLED'}
         # UIのプルダウンも最新ストック位置へ合わせる
         try:
             _set_saved_camera_index_safe(scene, manager, latest_index, apply_saved_data=False)
@@ -874,6 +912,7 @@ def _build_current_camera_saved_item(scene, camera) -> dict:
         'selected_objects': selected_objects,
         'lattice_enabled': _get_current_lattice_management_enabled(scene),
         'lattice_state': _get_current_lattice_stock_state(scene),
+        'fisheye_state': fisheye_stock.capture(scene),
         'record_view_layer_exclude_state': bool(getattr(scene, 'record_view_layer_exclude_state', False)),
         'view_layer_exclude_state': _get_current_view_layer_exclude_state() if bool(getattr(scene, 'record_view_layer_exclude_state', False)) else {},
         'created_at': float(time.time()),
@@ -977,8 +1016,8 @@ class OBJECT_OT_save_camera_position(bpy.types.Operator):
         camera = _get_valid_scene_camera(scene, repair=True)
         manager = get_camera_data_manager()
         if camera:
-            new_item = _build_current_camera_saved_item(scene, camera)
             try:
+                new_item = _build_current_camera_saved_item(scene, camera)
                 result = _save_current_item_as_stock(scene, manager, new_item)
             except Exception as exc:
                 self.report({'ERROR'}, f"データを保存できませんでした: {exc}")
@@ -1122,7 +1161,11 @@ class OBJECT_OT_save_selected_stock_memo(bpy.types.Operator):
         existing = dict(saved_items[index])
         delete_candidate_names = _get_recorded_object_delete_candidate_names_from_ui(context)
 
-        current_item = _build_current_camera_saved_item(scene, camera)
+        try:
+            current_item = _build_current_camera_saved_item(scene, camera)
+        except Exception as exc:
+            self.report({'ERROR'}, f"データを保存できませんでした: {exc}")
+            return {'CANCELLED'}
         if delete_candidate_names or bool(getattr(scene, 'record_selected_objects', False)):
             current_item = _build_item_with_recorded_object_delta(
                 context,
@@ -1472,7 +1515,7 @@ class OBJECT_OT_load_background_image(bpy.types.Operator):
                 scene.frame_set(int(fnum))
 
             # 既定の読込フォルダ更新
-            manager.save_data(background_image_folder_path=_safe_existing_dirpath(self.directory, fallback=manager.background_image_folder_path))
+            _remember_background_image_folder(manager, self.filepath)
             self.report({'INFO'}, f"下絵を読み込みました: {self.filepath}")
         except Exception as e:
             self.report({'ERROR'}, f"下絵の読み込みに失敗: {e}")
@@ -1492,6 +1535,8 @@ class OBJECT_OT_load_background_image(bpy.types.Operator):
     def invoke(self, context, event):
         manager = get_camera_data_manager()
         self.directory = _safe_existing_dirpath(manager.background_image_folder_path, fallback=manager.background_image_folder_path)
+        # Blender prioritizes filepath over directory, including the previous invocation's value.
+        self.filepath = os.path.join(self.directory, '')
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
@@ -1930,7 +1975,9 @@ class OBJECT_OT_reload_current_saved_stock(bpy.types.Operator):
         index = _safe_saved_index(scene, manager)
         index = max(0, min(index, len(saved_items) - 1))
         _set_saved_camera_index_safe(scene, manager, index, apply_saved_data=False)
-        _apply_saved_camera_data(scene, camera, manager, saved_items[index])
+        if _apply_saved_camera_data(scene, camera, manager, saved_items[index]) is False:
+            self.report({'WARNING'}, 'ストックの読込を中止しました')
+            return {'CANCELLED'}
         _sync_scene_saved_memo(scene, manager)
         _apply_camera_view(context)
         _tag_redraw_all_areas()
@@ -2032,7 +2079,8 @@ def update_saved_camera_index(self, context):
         data = saved_items[index]
 
         if not _SAVED_STOCK_APPLY_SUSPENDED:
-            _apply_saved_camera_data(scene, camera, manager, data)
+            if _apply_saved_camera_data(scene, camera, manager, data) is False:
+                return
         _sync_scene_saved_memo(scene, manager)
 
         _apply_camera_view(context)
@@ -2588,5 +2636,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.210
+# Version Footer: 1.214
 # -------------------------------

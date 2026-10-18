@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-# Manga Camera 1.210: stock-slot UI and explicit file operations.
+# Manga Camera 1.214: stock-slot UI and explicit file operations.
 
 import os
+from datetime import datetime
 
 import bpy
 from bpy.props import EnumProperty, StringProperty
@@ -147,11 +148,11 @@ class MPM_OT_delete_stock_slot(bpy.types.Operator):
             return {'CANCELLED'}
         self.slot_id, self.slot_name = store.active_id, store.active['name']
         self.count = len(store.manager.saved_camera_data)
-        return context.window_manager.invoke_props_dialog(self, width=360)
+        return context.window_manager.invoke_props_dialog(self, width=520)
 
     def draw(self, context):
-        self.layout.label(text=f'「{self.slot_name}」を削除しますか？', icon='ERROR')
-        self.layout.label(text=f'記録数: {self.count}件（JSONは退避されます）')
+        self.layout.label(text=f'スロット「{self.slot_name}」{self.count}件のデータを削除しますか？', icon='ERROR')
+        self.layout.label(text='JSONは退避され、設定の「削除スロットを復元」から戻せます')
 
     def execute(self, context):
         try:
@@ -160,6 +161,76 @@ class MPM_OT_delete_stock_slot(bpy.types.Operator):
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
         refresh_ui(context)
+        return {'FINISHED'}
+
+
+class MPM_PG_deleted_stock_slot(bpy.types.PropertyGroup):
+    filename: StringProperty()
+    deleted_at: StringProperty()
+    stamp: StringProperty()
+
+
+class MPM_UL_deleted_stock_slots(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        row = layout.row(align=True)
+        row.label(text=item.name, icon='FILE_BACKUP')
+        row.label(text=item.deleted_at)
+
+
+class MPM_OT_restore_stock_slot(bpy.types.Operator):
+    bl_idname = 'camera.restore_stock_slot'
+    bl_label = '削除スロットを復元'
+    bl_description = '退避済みJSONからスロットを復元します。同名データは上書きせず、カメラやポーズは変更しません'
+
+    slot_folder: StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    backups: bpy.props.CollectionProperty(type=MPM_PG_deleted_stock_slot, options={'HIDDEN', 'SKIP_SAVE'})
+    selected_index: bpy.props.IntProperty(default=0, min=0, options={'HIDDEN', 'SKIP_SAVE'})
+
+    @classmethod
+    def poll(cls, context):
+        store = _store()
+        return bool(store and store.catalog is not None)
+
+    def invoke(self, context, event):
+        store = _store()
+        try:
+            backups = store.deleted_slots()
+        except Exception as exc:
+            self.report({'ERROR'}, f'削除スロットを確認できませんでした: {exc}')
+            return {'CANCELLED'}
+        if not backups:
+            self.report({'INFO'}, '復元できる削除スロットはありません')
+            return {'CANCELLED'}
+        self.slot_folder = store.folder
+        self.backups.clear()
+        for backup in backups:
+            item = self.backups.add()
+            item.name, item.filename = backup['name'], backup['file']
+            item.stamp = ':'.join(str(value) for value in backup['stamp'])
+            item.deleted_at = datetime.fromtimestamp(backup['stamp'][0] / 1e9).strftime('%Y/%m/%d %H:%M:%S')
+        self.selected_index = 0
+        return context.window_manager.invoke_props_dialog(self, width=520)
+
+    def draw(self, context):
+        self.layout.label(text='復元するスロットを選んでください（新しい順）')
+        self.layout.template_list('MPM_UL_deleted_stock_slots', '', self, 'backups',
+                                  self, 'selected_index', rows=6, maxrows=6)
+        self.layout.label(text='同名がある場合は別名で復元します。退避JSONは残します')
+
+    def execute(self, context):
+        try:
+            store = _store()
+            if self.slot_folder != store.folder:
+                raise ValueError('保存先が変わりました。復元の一覧を開き直してください')
+            if not 0 <= self.selected_index < len(self.backups):
+                raise ValueError('復元するスロットを選んでください')
+            item = self.backups[self.selected_index]
+            name = store.restore_deleted(item.filename, expected_stamp=tuple(int(v) for v in item.stamp.split(':')))
+        except Exception as exc:
+            self.report({'ERROR'}, f'スロットを復元できませんでした: {exc}')
+            return {'CANCELLED'}
+        refresh_ui(context)
+        self.report({'INFO'}, f'「{name}」を復元しました')
         return {'FINISHED'}
 
 
@@ -272,9 +343,13 @@ def draw_folder(layout):
     layout.label(text='スロット保存先')
     layout.label(text=store.folder if store and store.folder else '(未設定)')
     layout.operator('camera.set_stock_slot_folder')
+    restore = layout.row(align=True)
+    restore.enabled = bool(store and store.catalog is not None)
+    restore.operator('camera.restore_stock_slot', icon='RECOVER_LAST')
 
 
-CLASSES = (MPM_OT_create_stock_slot, MPM_OT_rename_stock_slot, MPM_OT_delete_stock_slot, MPM_OT_set_stock_slot_folder,
+CLASSES = (MPM_OT_create_stock_slot, MPM_OT_rename_stock_slot, MPM_OT_delete_stock_slot,
+           MPM_PG_deleted_stock_slot, MPM_UL_deleted_stock_slots, MPM_OT_restore_stock_slot, MPM_OT_set_stock_slot_folder,
            MPM_OT_export_all_stock_slots, MPM_OT_import_all_stock_slots)
 
 
@@ -299,4 +374,4 @@ def unregister_slots():
             bpy.utils.unregister_class(cls)
 
 
-# Version Footer: 1.210
+# Version Footer: 1.214

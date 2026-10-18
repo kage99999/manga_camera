@@ -51,6 +51,7 @@ class FisheyeRegression(base.Regression):
         self.camera.data.lens = 50
         self.scene.cursor.location = (0, 0, 0)
         self.settings = self.scene.gyogan
+        self.scene.mpm_lattice_management_enabled = False
         self.settings.enabled = True
         self.settings.effect_scope = 'MANUAL'
         self.settings.subdivision = 'NONE'
@@ -179,11 +180,12 @@ class FisheyeRegression(base.Regression):
         self.assertNotEqual(tuple(item['position']), before)
         self.assertEqual(tuple(self.camera.location), before)
         self.assertTrue(self.scene.gyogan_dolly.active)
-        self.assertNotIn('fisheye_state', item)
+        self.assertTrue(item['fisheye_state']['enabled'])
 
     def test_stock_read_releases_driver_before_camera_restore(self):
         self.start_dolly()
         item = self.item()
+        item.pop('fisheye_state')  # Legacy records still release dolly without restoring fish settings.
         item['position'] = [2, 3, 14]
         item['focal_length'] = 34
         self.settings.strength = 2
