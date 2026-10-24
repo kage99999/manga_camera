@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.214）:
-# - 依存グラフの再評価後に保存ポーズを適用し、不要な除外状態更新を抑制
+# 変更点（1.215）:
+# - 操作中の3Dビューのローカル状態も付随データとして保存・復元
 
 import bpy
 from . import fisheye
 from . import fisheye_stock
 from . import slot_store
+from . import local_view
 import os
 import sys
 import time
@@ -67,7 +68,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 214)  # 1.214
+    v = (1, 0, 215)  # 1.215
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -342,8 +343,12 @@ def _apply_saved_camera_data(scene, camera, manager, data):
         fisheye_stock.disable(scene)
         fisheye.warn(f'魚眼の復元を停止しました: {exc}')
         return False
+    try:
+        local_view.apply(bpy.context, data)
+    except Exception as exc:
+        print(f'ローカルビュー状態の適用中にエラーが発生しました: {exc}')
     if pending_poses:
-        # Collection/visibility changes rebuild the graph and reevaluate Actions.
+        # Collection/local-view changes rebuild the graph and reevaluate Actions.
         # Finish that evaluation before restoring unkeyed poses, once for all rigs.
         try:
             bpy.context.view_layer.update()
@@ -821,11 +826,7 @@ class OBJECT_OT_recall_camera_position(bpy.types.Operator):
             _set_saved_camera_index_safe(scene, manager, latest_index, apply_saved_data=False)
         except Exception:
             pass
-        _sanitize_view3d_local_cameras(context, camera)
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.spaces.active.region_3d.view_perspective = 'CAMERA'
-                break
+        _apply_camera_view(context)
         try:
             if context.area:
                 context.area.tag_redraw()
@@ -915,6 +916,7 @@ def _build_current_camera_saved_item(scene, camera) -> dict:
         'fisheye_state': fisheye_stock.capture(scene),
         'record_view_layer_exclude_state': bool(getattr(scene, 'record_view_layer_exclude_state', False)),
         'view_layer_exclude_state': _get_current_view_layer_exclude_state() if bool(getattr(scene, 'record_view_layer_exclude_state', False)) else {},
+        **local_view.capture_fields(bpy.context, bool(getattr(scene, 'record_view_layer_exclude_state', False))),
         'created_at': float(time.time()),
     }
 
@@ -1988,7 +1990,7 @@ class OBJECT_OT_reload_current_saved_stock(bpy.types.Operator):
 class OBJECT_OT_reset_attached_data_input_state(bpy.types.Operator):
     bl_idname = "camera.reset_attached_data_input_state"
     bl_label = "付随データ入力状態をリセット"
-    bl_description = "次回保存用の摘要メモ・選択OBJデータ・ビューレイヤー除外状態保存・ラティス管理有効をOFFにします。既存ストックの保存済み付随データは削除しません"
+    bl_description = "次回保存用の摘要メモ・選択OBJデータ・ビューレイヤーとローカルビューの状態保持・ラティス管理有効をOFFにします。既存ストックの保存済み付随データは削除しません"
 
     def execute(self, context):
         scene = context.scene
@@ -2060,6 +2062,10 @@ def _apply_camera_view(context):
     if camera is None:
         return
     _sanitize_view3d_local_cameras(context, camera)
+    target = local_view.viewport(context)
+    if target is not None:
+        target[1].region_3d.view_perspective = 'CAMERA'
+        return
     # カメラビューへ切替（画像が無くても構図確認できるように）
     for area in context.screen.areas:
         if area.type == 'VIEW_3D':
@@ -2122,8 +2128,8 @@ def register_scene_simple_properties():
         options={'TEXTEDIT_UPDATE'}
     )
     bpy.types.Scene.record_view_layer_exclude_state = bpy.props.BoolProperty(
-        name="ビューレイヤー除外状態を保存",
-        description="ON のとき、現在のビューレイヤーにあるコレクションの除外ON/OFF状態を記録データへ含めます",
+        name="ビューレイヤー・ローカルビュー状態保持",
+        description="ON のとき、コレクションの除外状態と操作中の3DビューのローカルビューON/OFF・対象OBJを記録します",
         default=False,
     )
     bpy.types.Scene.record_selected_objects = bpy.props.BoolProperty(
@@ -2636,5 +2642,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.214
+# Version Footer: 1.215
 # -------------------------------

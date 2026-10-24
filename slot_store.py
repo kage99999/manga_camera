@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Manga Camera 1.214: persistent camera-stock libraries, independent of .blend.
+# Manga Camera 1.215: persistent camera-stock libraries, independent of .blend.
 
 import copy
 import json
@@ -512,4 +512,4 @@ def initialize(manager):
     return store
 
 
-# Version Footer: 1.214
+# Version Footer: 1.215

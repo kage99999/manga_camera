@@ -2,7 +2,7 @@
 # ファイル名：lattice_ui_draw.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション UI描画
-# 変更点（1.214）:
+# 変更点（1.215）:
 # - バージョン表記同期
 # - 描画中のモディファイア変更とビューレイヤー更新を除去
 
@@ -245,5 +245,5 @@ __all__ = ["draw_lattice_manager_panel"]
 
 # -------------------------------
 # ファイル名：lattice_ui_draw.py
-# Version Footer: 1.214
+# Version Footer: 1.215
 # -------------------------------

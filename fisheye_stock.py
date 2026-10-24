@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Manga Camera 1.214: portable fisheye stock settings and safe restoration.
+# Manga Camera 1.215: portable fisheye stock settings and safe restoration.
 """Serialize working settings, never generated geometry or Blender RNA pointers."""
 
 import json
@@ -257,4 +257,4 @@ def apply(scene, camera, plan):
     scene.update_tag()
 
 
-# Version Footer: 1.214
+# Version Footer: 1.215

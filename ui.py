@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.214）:
+# 変更点（1.215）:
 # - 記録・読込のスロット選択、設定内の保存先と個別/全体入出力
 
 import bpy
@@ -388,6 +388,8 @@ def _saved_data_has_view_layer_state(data):
         return False
     if not bool(data.get('record_view_layer_exclude_state', False)):
         return False
+    if isinstance(data.get('local_view_state'), dict):
+        return True
     state = data.get('view_layer_exclude_state', {})
     if not isinstance(state, dict):
         return False
@@ -438,7 +440,7 @@ def _draw_saved_memo_controls(layout, context):
         box.label(text="記録データがありません")
 
     box.prop(scene, 'saved_memo_text', text="摘要メモ")
-    box.prop(scene, 'record_view_layer_exclude_state', text="ビューレイヤー除外状態を保存")
+    box.prop(scene, 'record_view_layer_exclude_state', text="ビューレイヤー・ローカルビュー状態保持")
     box.prop(scene, 'record_selected_objects', text="選択OBJデータ")
     if getattr(scene, 'record_selected_objects', False):
         names = []
@@ -1325,5 +1327,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.214
+# Version Footer: 1.215
 # -------------------------------

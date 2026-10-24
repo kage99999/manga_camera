@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.214）:
-# - ビューレイヤー復元の再評価で保存ポーズがキーへ戻る問題を修正
+# 変更点（1.215）:
+# - ローカルビューの記録・復元とカメラ対象外の常時警告を追加
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 214),
+    "version": (1, 0, 215),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -19,6 +19,7 @@ from . import xmp_rendering
 from . import ui
 from . import fisheye
 from . import slots
+from . import local_view
 
 def register():
     steps = (
@@ -30,6 +31,7 @@ def register():
         (xmp_rendering.register_xmp_rendering, xmp_rendering.unregister_xmp_rendering),
         (fisheye.register_fisheye, fisheye.unregister_fisheye),
         (ui.register_ui, ui.unregister_ui),
+        (local_view.register, local_view.unregister),
     )
     started = []
     try:
@@ -45,6 +47,7 @@ def register():
         raise
 
 def unregister():
+    local_view.unregister()
     ui.unregister_ui()
     fisheye.unregister_fisheye()
     xmp_rendering.unregister_xmp_rendering()
@@ -56,5 +59,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.214
+# Version Footer: 1.215
 # -------------------------------
