@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.215）:
-# - 記録・読込のスロット選択、設定内の保存先と個別/全体入出力
+# 変更点（1.217）:
+# - 下絵読込・一括読込・再読込の3ボタンと一括読込初期値を表示
 
 import bpy
+from . import local_view
 from . import fisheye
 from . import slots
 
@@ -313,7 +314,8 @@ def _draw_record_read_controls(layout, context):
 
     row = layout.row(align=True)
     row.scale_y = 2.0
-    row.operator("camera.load_background_image", text="現在のカメラへ下絵を読込")
+    row.operator("camera.load_background_image", text="下絵読込")
+    row.operator("camera.batch_load_background_images", text="一括読込")
     row.operator("camera.reload_background_image", text="再読込")
 
     slots.draw_selector(layout, context)
@@ -388,8 +390,6 @@ def _saved_data_has_view_layer_state(data):
         return False
     if not bool(data.get('record_view_layer_exclude_state', False)):
         return False
-    if isinstance(data.get('local_view_state'), dict):
-        return True
     state = data.get('view_layer_exclude_state', {})
     if not isinstance(state, dict):
         return False
@@ -412,24 +412,22 @@ def _draw_saved_data_status_labels(layout, current_data):
     has_lattice = _saved_data_has_lattice_enabled(current_data)
     has_fisheye = bool(isinstance(current_data, dict) and current_data.get('fisheye_state', {}).get('enabled'))
     has_view_layer = _saved_data_has_view_layer_state(current_data)
+    has_local_view = local_view.has_recorded_state(current_data)
 
     prefix_row = layout.row(align=True)
     prefix_row.alignment = 'LEFT'
     prefix_row.label(text="付随データ：")
 
-    row1 = layout.row(align=True)
-    split1 = row1.split(factor=0.5, align=True)
-    left1 = split1.row(align=True)
-    right1 = split1.row(align=True)
-    _draw_additional_data_status_badge(left1, "OBJデータ", has_obj)
-    _draw_additional_data_status_badge(right1, "魚眼" if has_fisheye else "ラティス" if has_lattice else "魚眼・ラティス", has_fisheye or has_lattice)
-
-    row2 = layout.row(align=True)
-    split2 = row2.split(factor=0.5, align=True)
-    left2 = split2.row(align=True)
-    right2 = split2.row(align=True)
-    _draw_additional_data_status_badge(left2, "ビューレイヤー状態", has_view_layer)
-    _draw_additional_data_status_badge(right2, "摘要", has_memo)
+    for entries in (
+        (("OBJデータ", has_obj), ("魚眼", has_fisheye), ("ラティス", has_lattice)),
+        (("ビューレイヤー", has_view_layer), ("ローカルビュー", has_local_view), ("適用", has_memo)),
+    ):
+        split = layout.row(align=True).split(factor=1 / 3, align=True)
+        first = split.row(align=True)
+        rest = split.split(factor=0.5, align=True)
+        cells = (first, rest.row(align=True), rest.row(align=True))
+        for cell, (text, enabled) in zip(cells, entries):
+            _draw_additional_data_status_badge(cell, text, enabled)
 
 def _draw_saved_memo_controls(layout, context):
     scene = context.scene
@@ -440,7 +438,8 @@ def _draw_saved_memo_controls(layout, context):
         box.label(text="記録データがありません")
 
     box.prop(scene, 'saved_memo_text', text="摘要メモ")
-    box.prop(scene, 'record_view_layer_exclude_state', text="ビューレイヤー・ローカルビュー状態保持")
+    box.prop(scene, 'record_view_layer_exclude_state', text="ビューレイヤー状態保持")
+    box.prop(scene, 'record_local_view_state', text="ローカルビュー状態保持")
     box.prop(scene, 'record_selected_objects', text="選択OBJデータ")
     if getattr(scene, 'record_selected_objects', False):
         names = []
@@ -1072,6 +1071,10 @@ def _draw_misc_controls(layout, context):
         box.operator("camera.append_stock_data", text="ストックデータ追加読込")
         box.operator("camera.set_output_folder", text="出力フォルダを指定")
         box.operator("camera.set_background_image_folder", text="読込場所を設定")
+        initial = box.box()
+        initial.label(text="一括読込の初期値")
+        initial.prop(scene, "mpm_batch_camera_position")
+        initial.prop(scene, "mpm_batch_camera_rotation")
         box.separator()
         _draw_shortcut_settings_controls(box, context)
         box.separator()
@@ -1327,5 +1330,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.215
+# Version Footer: 1.217
 # -------------------------------

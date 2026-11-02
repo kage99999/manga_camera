@@ -33,6 +33,7 @@ class LocalViewRegression(unittest.TestCase):
         self.old_objects = {o.as_pointer() for o in bpy.data.objects}
         self.first, self.second = self.helper.new_mesh('LocalA'), self.helper.new_mesh('LocalB')
         self.scene.record_view_layer_exclude_state = True
+        self.scene.record_local_view_state = True
         self.space.use_local_camera = False
         self.select(self.first)
 
@@ -217,6 +218,99 @@ class LocalViewRegression(unittest.TestCase):
         self.scene.mpm_pose_keyframe_priority = True
         self.apply(item)
         self.assertAlmostEqual(bone.location.x, 1)
+
+    def test_independent_recording_and_restore_all_four_combinations(self):
+        collection = bpy.data.collections.new('IndependentLayer')
+        self.scene.collection.children.link(collection)
+        collection.objects.link(self.second)
+        self.scene.collection.objects.unlink(self.second)
+        bpy.context.view_layer.update()
+        child = bpy.context.view_layer.layer_collection.children[collection.name]
+        try:
+            for view_enabled, local_enabled in ((False, False), (True, False), (False, True), (True, True)):
+                with self.subTest(view=view_enabled, local=local_enabled):
+                    child.exclude = False
+                    self.apply(self.state(self.first))
+                    self.scene.record_view_layer_exclude_state = view_enabled
+                    self.scene.record_local_view_state = local_enabled
+                    item = self.helper.item()
+                    self.manager.save_data(camera_data=[item])
+                    self.manager.load_data()
+                    item = self.manager.saved_camera_data[0]
+                    self.assertEqual(item['record_local_view_state'], local_enabled)
+                    self.assertEqual(bool(item['view_layer_exclude_state']['collections']), view_enabled)
+                    self.assertEqual('local_view_state' in item, local_enabled)
+                    self.assertEqual(base.u._saved_data_has_view_layer_state(item), view_enabled)
+                    self.assertEqual(lv.has_recorded_state(item), local_enabled)
+                    child.exclude = True
+                    self.apply(self.state(self.camera))
+                    # Read uses saved flags, not the next-recording checkboxes.
+                    self.scene.record_view_layer_exclude_state = not view_enabled
+                    self.scene.record_local_view_state = not local_enabled
+                    self.apply(item)
+                    self.assertEqual(child.exclude, not view_enabled)
+                    expected = {self.first.name if local_enabled else self.camera.name}
+                    if view_enabled and not local_enabled:
+                        # Blender adds newly unexcluded bases to local views; no local snapshot is applied.
+                        expected.add(self.second.name)
+                    self.assertEqual(self.names(), expected)
+        finally:
+            bpy.data.collections.remove(collection)
+
+    def test_legacy_flag_migration_and_explicit_local_opt_out(self):
+        old = self.state(self.first)
+        normalized = s._normalize_saved_item(old)
+        self.assertTrue(normalized['record_local_view_state'])
+        legacy_normalized = dict(normalized)
+        legacy_normalized.pop('record_local_view_state')
+        self.assertEqual(s._stock_signature(legacy_normalized), s._stock_signature(normalized))
+        self.assertFalse(s._normalize_saved_item({'record_view_layer_exclude_state': True})['record_local_view_state'])
+        self.apply(normalized)
+        explicit_off = {**self.state(self.second), 'record_local_view_state': False}
+        self.apply(s._normalize_saved_item(explicit_off))
+        self.assertEqual(self.names(), {self.first.name})
+        local_only = {**self.state(self.second), 'record_view_layer_exclude_state': False, 'record_local_view_state': True}
+        self.apply(s._normalize_saved_item(local_only))
+        self.assertEqual(self.names(), {self.second.name})
+
+    def test_local_only_duplicate_and_additional_data_overwrite(self):
+        self.scene.record_view_layer_exclude_state = False
+        self.assertEqual(bpy.ops.camera.save_position(), {'FINISHED'})
+        self.assertEqual(bpy.ops.camera.save_position(), {'CANCELLED'})
+        self.apply(self.state(self.first))
+        self.assertEqual(bpy.ops.camera.save_selected_stock_memo(), {'FINISHED'})
+        self.assertEqual(len(self.manager.saved_camera_data), 1)
+        self.assertTrue(self.manager.saved_camera_data[0]['record_local_view_state'])
+        self.scene.record_local_view_state = False
+        self.assertEqual(bpy.ops.camera.save_selected_stock_memo(), {'FINISHED'})
+        self.assertEqual(len(self.manager.saved_camera_data), 1)
+        self.assertNotIn('local_view_state', self.manager.saved_camera_data[0])
+
+    def test_reset_turns_both_recording_options_off(self):
+        self.assertEqual(bpy.ops.camera.reset_attached_data_input_state(), {'FINISHED'})
+        self.assertFalse(self.scene.record_local_view_state)
+        self.assertFalse(self.scene.record_view_layer_exclude_state)
+
+    def test_six_badges_in_equal_width_rows(self):
+        class Layout(base.Layout):
+            def __init__(self):
+                super().__init__()
+                self.factors = []
+
+            def split(self, **kwargs):
+                self.factors.append(kwargs['factor'])
+                return self
+
+        item = {**self.state(self.first), 'record_view_layer_exclude_state': False,
+                'record_local_view_state': True, 'memo': 'example',
+                'fisheye_state': {'enabled': True}}
+        layout = Layout()
+        base.u._draw_saved_data_status_labels(layout, item)
+        badges = [args for name, args in layout.operators if name == 'camera.additional_data_status_badge']
+        self.assertEqual([b['text'] for b in badges],
+                         ['OBJデータ', '魚眼', 'ラティス', 'ビューレイヤー', 'ローカルビュー', '適用'])
+        self.assertEqual([b['depress'] for b in badges], [False, True, False, False, True, True])
+        self.assertEqual(layout.factors, [1 / 3, 0.5, 1 / 3, 0.5])
 
 
 if __name__ == '__main__':

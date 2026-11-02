@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.215）:
-# - 操作中の3Dビューのローカル状態も付随データとして保存・復元
+# 変更点（1.217）:
+# - 一括読込オペレーターと初期カメラ設定を登録
 
 import bpy
 from . import fisheye
 from . import fisheye_stock
 from . import slot_store
 from . import local_view
+from . import batch_import
 import os
 import sys
 import time
@@ -68,7 +69,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 215)  # 1.215
+    v = (1, 0, 217)  # 1.217
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -916,7 +917,8 @@ def _build_current_camera_saved_item(scene, camera) -> dict:
         'fisheye_state': fisheye_stock.capture(scene),
         'record_view_layer_exclude_state': bool(getattr(scene, 'record_view_layer_exclude_state', False)),
         'view_layer_exclude_state': _get_current_view_layer_exclude_state() if bool(getattr(scene, 'record_view_layer_exclude_state', False)) else {},
-        **local_view.capture_fields(bpy.context, bool(getattr(scene, 'record_view_layer_exclude_state', False))),
+        'record_local_view_state': bool(scene.record_local_view_state),
+        **local_view.capture_fields(bpy.context, scene.record_local_view_state),
         'created_at': float(time.time()),
     }
 
@@ -2006,6 +2008,7 @@ class OBJECT_OT_reset_attached_data_input_state(bpy.types.Operator):
             scene.record_view_layer_exclude_state = False
         except Exception:
             pass
+        scene.record_local_view_state = False
         try:
             if hasattr(scene, 'mpm_lattice_management_enabled'):
                 scene.mpm_lattice_management_enabled = False
@@ -2128,8 +2131,13 @@ def register_scene_simple_properties():
         options={'TEXTEDIT_UPDATE'}
     )
     bpy.types.Scene.record_view_layer_exclude_state = bpy.props.BoolProperty(
-        name="ビューレイヤー・ローカルビュー状態保持",
-        description="ON のとき、コレクションの除外状態と操作中の3DビューのローカルビューON/OFF・対象OBJを記録します",
+        name="ビューレイヤー状態保持",
+        description="ON のとき、現在のビューレイヤーにあるコレクションの除外ON/OFF状態を記録します",
+        default=False,
+    )
+    bpy.types.Scene.record_local_view_state = bpy.props.BoolProperty(
+        name="ローカルビュー状態保持",
+        description="ON のとき、操作中の3DビューのローカルビューON/OFFと対象OBJを記録します。ビューレイヤー状態の保存とは独立しています",
         default=False,
     )
     bpy.types.Scene.record_selected_objects = bpy.props.BoolProperty(
@@ -2193,7 +2201,7 @@ def unregister_camera_sync_properties():
         delattr(bpy.types.Camera, "mpm_bg_visible")
 
 def unregister_scene_simple_properties():
-    for attr in ("saved_camera_index", "show_settings", "show_background_section", "show_shortcut_settings_section", "open_output_after_render", "bg_cycle_skip_stocked", "saved_memo_text", "record_view_layer_exclude_state", "record_selected_objects", "mpm_pose_keyframe_priority"):
+    for attr in ("saved_camera_index", "show_settings", "show_background_section", "show_shortcut_settings_section", "open_output_after_render", "bg_cycle_skip_stocked", "saved_memo_text", "record_view_layer_exclude_state", "record_local_view_state", "record_selected_objects", "mpm_pose_keyframe_priority"):
         if hasattr(bpy.types.Scene, attr):
             delattr(bpy.types.Scene, attr)
 
@@ -2309,6 +2317,7 @@ CLASSES = (
     OBJECT_OT_set_camera_location_zero,
     OBJECT_OT_set_camera_rotation_snap,
     OBJECT_OT_load_background_image,
+    batch_import.OBJECT_OT_batch_load_background_images,
     OBJECT_OT_reload_background_image,
     OBJECT_OT_open_output_folder,
     OBJECT_OT_set_output_folder,
@@ -2574,6 +2583,7 @@ def register_core():
     global _CAMERA_DATA_MANAGER
 
     register_scene_simple_properties()
+    batch_import.register_properties()
     register_camera_sync_properties()
 
     for cls in CLASSES:
@@ -2634,6 +2644,7 @@ def unregister_core():
             pass
 
     unregister_scene_simple_properties()
+    batch_import.unregister_properties()
     unregister_camera_sync_properties()
     _CAMERA_DATA_MANAGER = None
 
@@ -2642,5 +2653,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.215
+# Version Footer: 1.217
 # -------------------------------

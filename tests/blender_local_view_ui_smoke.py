@@ -41,6 +41,9 @@ base.Regression.setUpClass()
 case = base.Regression()
 case.setUp()
 case.scene.record_view_layer_exclude_state = True
+case.scene.record_local_view_state = True
+case.scene.record_selected_objects = True
+case.scene.saved_memo_text = '配置確認'
 case.scene.mpm_lattice_management_enabled = False
 bpy.context.preferences.view.show_splash = False
 area = next(a for a in bpy.context.screen.areas if a.type == 'VIEW_3D')
@@ -50,7 +53,7 @@ space.show_region_ui = True
 obj = bpy.data.objects['Cube']
 index = 0
 record = None
-stem = 'local_view_ui_1_215_' + str(bpy.app.version[0]) + '_' + str(bpy.app.version[1])
+stem = 'local_view_ui_' + base.x.ADDON_VERSION_STR.replace('.', '_') + '_' + str(bpy.app.version[0]) + '_' + str(bpy.app.version[1])
 
 def screenshot(suffix):
     bpy.ops.screen.screenshot(filepath=str(base.ROOT / 'dist' / (stem + suffix + '.png')))
@@ -105,6 +108,22 @@ def step():
             elif index == 7:
                 assert lv.warning_camera(bpy.context) == case.camera
                 assert not errors
+                case.scene.record_view_layer_exclude_state = False
+                assert bpy.ops.camera.save_selected_stock_memo() == {'FINISHED'}
+            elif index == 8:
+                item = case.manager.saved_camera_data[-1]
+                assert not base.u._saved_data_has_view_layer_state(item)
+                assert lv.has_recorded_state(item)
+                screenshot('_local_only')
+                case.scene.record_view_layer_exclude_state = True
+                case.scene.record_local_view_state = False
+                assert bpy.ops.camera.save_selected_stock_memo() == {'FINISHED'}
+            elif index == 9:
+                item = case.manager.saved_camera_data[-1]
+                assert base.u._saved_data_has_view_layer_state(item)
+                assert not lv.has_recorded_state(item)
+                assert len(case.manager.saved_camera_data) == 1
+                screenshot('_view_layer_only')
             else:
                 finish()
                 return None

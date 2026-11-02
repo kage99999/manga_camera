@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Version: 1.215
+# Version: 1.217
 """Rotation serialization shared by camera and object stocks."""
 
 import math
@@ -66,4 +66,4 @@ def rotation_signature(data):
     return (mode, tuple(data.get('rotation', ())))
 
 
-# Version Footer: 1.215
+# Version Footer: 1.217

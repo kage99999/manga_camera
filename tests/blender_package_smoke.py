@@ -46,6 +46,9 @@ with patch.object(addon.core.CameraDataManager, 'load_data'), patch.object(
     assert not hasattr(bpy.types.Scene, 'mpm_record_keyframes')
     assert not hasattr(bpy.types.Scene, 'mpm_move_to_recorded_frame')
     assert not bpy.context.scene.mpm_pose_keyframe_priority
+    assert not bpy.context.scene.record_local_view_state
+    assert addon.core.batch_import.OBJECT_OT_batch_load_background_images.is_registered
+    assert tuple(bpy.context.scene.mpm_batch_camera_position) == (0.0, -1.0, 0.5)
     assert addon.fisheye.available() == (bpy.app.version >= (5, 0, 0))
     if addon.fisheye.available():
         assert addon.gyogan_camera.__file__.startswith(str(path))
@@ -54,6 +57,9 @@ with patch.object(addon.core.CameraDataManager, 'load_data'), patch.object(
     assert not addon.slots.MPM_OT_restore_stock_slot.is_registered
     assert not addon.slots.MPM_PG_deleted_stock_slot.is_registered
     assert not hasattr(bpy.types.Scene, 'record_selected_objects')
+    assert not hasattr(bpy.types.Scene, 'record_local_view_state')
+    assert not hasattr(bpy.types.Scene, 'mpm_batch_camera_position')
+    assert not hasattr(bpy.types.Scene, 'mpm_batch_camera_rotation')
     assert not hasattr(bpy.types.Scene, 'mpm_pose_keyframe_priority')
     assert not hasattr(bpy.types.Scene, 'gyogan')
     addon.register()

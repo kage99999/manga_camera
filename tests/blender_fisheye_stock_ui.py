@@ -21,8 +21,8 @@ def draw(self, context):
     try:
         original_draw(self, context)
         data = base.s._get_saved_item_safe(base.c.get_camera_data_manager(), int(context.scene.saved_camera_index))
-        drawn.append('魚眼' if data.get('fisheye_state', {}).get('enabled') else
-                     'ラティス' if data.get('lattice_enabled') else '魚眼・ラティス')
+        drawn.append((bool(data.get('fisheye_state', {}).get('enabled')),
+                      bool(data.get('lattice_enabled'))))
     except Exception:
         errors.append(traceback.format_exc())
 
@@ -107,7 +107,7 @@ def history():
 
 
 def finish():
-    if set(drawn) != {'魚眼', 'ラティス', '魚眼・ラティス'}:
+    if set(drawn) != {(True, False), (False, True), (False, False)}:
         errors.append('Not all badge states were drawn: ' + str(set(drawn)))
     if len(checks) != 7:
         errors.append('Missing state checks: ' + str(checks))

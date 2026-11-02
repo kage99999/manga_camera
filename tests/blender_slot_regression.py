@@ -58,6 +58,7 @@ class SlotRegression(unittest.TestCase):
         self.scene.saved_memo_text = ''
         self.scene.record_selected_objects = False
         self.scene.record_view_layer_exclude_state = False
+        self.scene.record_local_view_state = False
         slots.refresh_ui()
 
     def item(self, memo='saved'):

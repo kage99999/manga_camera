@@ -94,6 +94,7 @@ class Regression(unittest.TestCase):
         self.scene.record_selected_objects = False
         self.scene.mpm_pose_keyframe_priority = False
         self.scene.record_view_layer_exclude_state = False
+        self.scene.record_local_view_state = False
         self.scene.saved_memo_text = ''
         self.scene.mpm_dolly_props.enabled = False
         if addon.fisheye.available():

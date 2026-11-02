@@ -2,7 +2,7 @@
 # ファイル名：lattice_types.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション PropertyGroup / UIList
-# 変更点（1.215）:
+# 変更点（1.217）:
 # - バージョン表記同期
 # - ラティス管理用PropertyGroup/UIList自体の挙動は現状維持
 
@@ -102,5 +102,5 @@ __all__ = [
 
 # -------------------------------
 # ファイル名：lattice_types.py
-# Version Footer: 1.215
+# Version Footer: 1.217
 # -------------------------------

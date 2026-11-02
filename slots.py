@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Manga Camera 1.215: stock-slot UI and explicit file operations.
+# Manga Camera 1.217: stock-slot UI and explicit file operations.
 
 import os
 from datetime import datetime
@@ -374,4 +374,4 @@ def unregister_slots():
             bpy.utils.unregister_class(cls)
 
 
-# Version Footer: 1.215
+# Version Footer: 1.217

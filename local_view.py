@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Version: 1.215
+# Version: 1.217
 """Per-viewport local-view snapshots and a non-rendering camera warning."""
 
 import bpy
@@ -55,8 +55,18 @@ def capture_fields(context, enabled):
     return {'local_view_state': {'enabled': active, 'objects': names}}
 
 
+def record_enabled(data):
+    # Before 1.217, local-view recording shared the view-layer flag.
+    return bool(data.get('record_local_view_state',
+                         data.get('record_view_layer_exclude_state', False) and 'local_view_state' in data))
+
+
+def has_recorded_state(data):
+    return isinstance(data, dict) and record_enabled(data) and isinstance(data.get('local_view_state'), dict)
+
+
 def apply(context, data):
-    if not data.get('record_view_layer_exclude_state') or 'local_view_state' not in data:
+    if not has_recorded_state(data):
         return
     target = viewport(context)
     if target is None:
@@ -86,6 +96,10 @@ def apply(context, data):
             if seed is not None:
                 seed.select_set(False)
     if state['enabled']:
+        if active:
+            # Unexcluding collections can add bases to local views. Read current,
+            # not cached, membership before deciding which bits need changing.
+            layer.update()
         for obj in layer.objects:
             include = obj.name in wanted
             if not active or _is_member(obj, space, layer) != include:
@@ -181,4 +195,4 @@ def unregister():
                 area.tag_redraw()
 
 
-# Version Footer: 1.215
+# Version Footer: 1.217

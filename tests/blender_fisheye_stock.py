@@ -177,13 +177,13 @@ class FisheyeStock(FisheyeRegression):
         self.settings.enabled = False
         off = self.item()
         lattice = {**off, 'lattice_enabled': True}
-        for data, text, active in ((fish_item, '魚眼', True), (off, '魚眼・ラティス', False),
-                                   (lattice, 'ラティス', True), (None, '魚眼・ラティス', False)):
+        for data, fish_active, lattice_active in ((fish_item, True, False), (off, False, False),
+                                                 (lattice, False, True), (None, False, False)):
             layout = base.Layout()
             base.u._draw_saved_data_status_labels(layout, data)
             badges = [args for name, args in layout.operators if name == 'camera.additional_data_status_badge']
-            self.assertEqual(badges[1]['text'], text)
-            self.assertEqual(badges[1]['depress'], active)
+            self.assertEqual([b['text'] for b in badges[1:3]], ['魚眼', 'ラティス'])
+            self.assertEqual([b['depress'] for b in badges[1:3]], [fish_active, lattice_active])
 
     def test_automatic_scope_and_object_center_are_restored(self):
         obj = self.new_mesh('AutoStockMesh')

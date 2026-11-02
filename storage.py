@@ -2,7 +2,7 @@
 # ファイル名：storage.py
 # 00漫画用Camera Position Manager
 # 機能：保存データとパス解決の共通処理
-# 変更点（1.215）:
+# 変更点（1.217）:
 # - JSON形式検証、比較の事前絞込、ストック単位の高速JSON書込
 
 import json
@@ -302,6 +302,7 @@ def _stock_signature(item: dict) -> tuple:
         fisheye_stock.signature(item.get('fisheye_state')),
         bool(item.get("record_view_layer_exclude_state", False)),
         _view_layer_exclude_state_signature(item.get("view_layer_exclude_state")),
+        local_view.record_enabled(item),
         local_view.signature(item.get('local_view_state')),
     )
 
@@ -351,6 +352,7 @@ def _normalize_saved_item(item) -> dict:
         'lattice_enabled': bool(item.get('lattice_enabled', False)),
         'lattice_state': _normalize_lattice_state(item.get('lattice_state'), bool(item.get('lattice_enabled', False))),
         'record_view_layer_exclude_state': bool(item.get('record_view_layer_exclude_state', False)),
+        'record_local_view_state': local_view.record_enabled(item),
         'view_layer_exclude_state': _normalize_view_layer_exclude_state(item.get('view_layer_exclude_state')),
     }
     selected_objects = item.get('selected_objects', [])
@@ -446,6 +448,7 @@ def _stock_comparison_prefix(item):
         bool(item.get('record_selected_objects', False)),
         bool(item.get('lattice_enabled', False)),
         bool(item.get('record_view_layer_exclude_state', False)),
+        local_view.record_enabled(item),
     )
 
 
