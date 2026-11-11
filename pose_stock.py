@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Version: 1.217
+# Version: 1.219
 """Pose snapshots with selectable keyframe priority for camera stocks."""
 
 import json
@@ -129,7 +129,10 @@ def iter_action_curves(action, slot=None):
 
 def _has_active_nla(anim):
     return bool(anim and anim.use_nla and any(
-        not track.mute and any(not strip.mute for strip in track.strips) for track in anim.nla_tracks))
+        not track.mute and any(
+            not strip.mute and not (track.lock and track.name.startswith('[Action Stash]')
+                                    and strip.influence == 0.0 and not strip.use_animated_influence)
+            for strip in track.strips) for track in anim.nla_tracks))
 
 
 def _pose_animation_state(obj, record, *, prefer_keyframes=True):
@@ -261,4 +264,4 @@ def current_pose_records(scene, item):
 
 
 
-# Version Footer: 1.217
+# Version Footer: 1.219

@@ -565,6 +565,27 @@ class PoseRegression(unittest.TestCase):
         self.assertEqual(bone['ik_switch'], 1.0)
         self.assertEqual(p.stock_pose_priority_reasons(saved), {'KEYFRAME'})
 
+    def test_zero_influence_nla_does_not_block_pose(self):
+        bone = self.rig.pose.bones['Euler']
+        bone.location.x = 4.0
+        self.save()
+        anim = self.rig.animation_data_create()
+        action = bpy.data.actions.new('ZeroInfluencePoseAction')
+        track = anim.nla_tracks.new()
+        track.name = '[Action Stash]'
+        strip = track.strips.new('stash', 1, action)
+        strip.influence = 0.0
+        track.lock = True
+        bone.location.x = 0.0
+        self.scene.mpm_pose_keyframe_priority = False
+        c._apply_saved_camera_data(self.scene, self.camera, self.manager, self.manager.saved_camera_data[0])
+        self.assertAlmostEqual(bone.location.x, 4.0)
+        self.assertFalse(p._has_active_nla(anim))
+        self.assertFalse(track.mute)
+        self.assertEqual(strip.influence, 0.0)
+        strip.use_animated_influence = True
+        self.assertTrue(p._has_active_nla(anim))
+
     def test_nla_is_preserved_without_notice(self):
         bone = self.rig.pose.bones['Euler']
         bone.keyframe_insert('location', frame=100)

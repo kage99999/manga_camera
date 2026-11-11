@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Manga Camera 1.217: boundary to the imported Gyogan Camera 0.1.21 engine.
+# Manga Camera 1.219: boundary to the imported Gyogan Camera 0.1.21 engine.
 """Keep the optional fisheye engine isolated from legacy camera workflows."""
 
 import bpy
@@ -145,4 +145,4 @@ def unregister_fisheye():
             _registered = False
     _unavailable_reason = ''
 
-# Version Footer: 1.217
+# Version Footer: 1.219

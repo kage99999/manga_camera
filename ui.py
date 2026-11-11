@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.217）:
+# 変更点（1.219）:
 # - 下絵読込・一括読込・再読込の3ボタンと一括読込初期値を表示
 
 import bpy
+import copy
+import json
+import time
 from . import local_view
 from . import fisheye
 from . import slots
@@ -38,12 +41,79 @@ from .xmp_rendering import (
 )
 
 
+_badge_last_click = None
+
+
 class MPM_OT_additional_data_status_badge(bpy.types.Operator):
     bl_idname = "camera.additional_data_status_badge"
     bl_label = "付随データ状態表示"
-    bl_description = "付随データの有無を表示するための押下風ボタンです"
+    bl_description = "記録済みの付随データをダブルクリックすると削除できます"
+    kind: bpy.props.StringProperty(options={'HIDDEN'})
+    slot_path: bpy.props.StringProperty(options={'HIDDEN'})
+    stock_index: bpy.props.IntProperty(options={'HIDDEN'})
+    stock_snapshot: bpy.props.StringProperty(options={'HIDDEN'})
+
+    def invoke(self, context, event):
+        global _badge_last_click
+        manager = get_camera_data_manager()
+        index = _safe_saved_index(context.scene, manager)
+        item = _get_saved_item_safe(manager, index)
+        if not isinstance(item, dict):
+            return {'CANCELLED'}
+        snapshot = json.dumps(item, sort_keys=True, ensure_ascii=False)
+        identity = (manager.save_file_path, index, self.kind, snapshot)
+        now = time.monotonic()
+        last = _badge_last_click
+        _badge_last_click = (identity, now)
+        if not last or last[0] != identity or now - last[1] > 0.5:
+            return {'CANCELLED'}
+        _badge_last_click = None
+        self.slot_path, self.stock_index, self.stock_snapshot = identity[0], index, snapshot
+        return context.window_manager.invoke_props_dialog(self, width=400)
+
+    def draw(self, context):
+        self.layout.label(text=f'付随データ「{self.kind}」を削除しますか？')
 
     def execute(self, context):
+        manager = get_camera_data_manager()
+        index = self.stock_index
+        if manager.save_file_path != self.slot_path or _safe_saved_index(context.scene, manager) != index:
+            self.report({'WARNING'}, '選択中の記録が変更されたため削除を中止しました')
+            return {'CANCELLED'}
+        item = _get_saved_item_safe(manager, index)
+        if not isinstance(item, dict) or json.dumps(item, sort_keys=True, ensure_ascii=False) != self.stock_snapshot:
+            self.report({'WARNING'}, '記録が変更されたため削除を中止しました')
+            return {'CANCELLED'}
+        updated = copy.deepcopy(item)
+        if self.kind == 'OBJデータ':
+            updated['record_selected_objects'] = False
+            updated['selected_objects'] = []
+        elif self.kind == '魚眼':
+            updated.pop('fisheye_state', None)
+        elif self.kind == 'ラティス':
+            updated['lattice_enabled'] = False
+            updated.pop('lattice_state', None)
+        elif self.kind == 'ビューレイヤー':
+            updated['record_view_layer_exclude_state'] = False
+            updated.pop('view_layer_exclude_state', None)
+        elif self.kind == 'ローカルビュー':
+            updated['record_local_view_state'] = False
+            updated.pop('local_view_state', None)
+        elif self.kind == '適用':
+            updated['memo'] = ''
+        else:
+            return {'CANCELLED'}
+        items = list(manager.saved_camera_data)
+        items[index] = updated
+        try:
+            manager.save_data(camera_data=items)
+        except Exception as exc:
+            self.report({'ERROR'}, f'付随データを保存できません: {exc}')
+            return {'CANCELLED'}
+        rebuild_enum_cache(manager)
+        if self.kind == '適用':
+            _sync_scene_saved_memo(context.scene, manager)
+        self.report({'INFO'}, f'付随データ「{self.kind}」を削除しました')
         return {'FINISHED'}
 
 
@@ -401,9 +471,10 @@ def _draw_additional_data_status_badge(row, text, enabled):
     badge_row = row.row(align=True)
     badge_row.enabled = bool(enabled)
     try:
-        badge_row.operator("camera.additional_data_status_badge", text=text, depress=bool(enabled))
+        op = badge_row.operator("camera.additional_data_status_badge", text=text, depress=bool(enabled))
     except TypeError:
-        badge_row.operator("camera.additional_data_status_badge", text=text)
+        op = badge_row.operator("camera.additional_data_status_badge", text=text)
+    op.kind = text
 
 
 def _draw_saved_data_status_labels(layout, current_data):
@@ -1330,5 +1401,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.217
+# Version Footer: 1.219
 # -------------------------------

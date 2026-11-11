@@ -2,7 +2,7 @@
 # ファイル名：all_object_data.py
 # 00漫画用Camera Position Manager
 # 機能：全オブジェクト位置・回転・スケールの専用ストック管理
-# 変更点（1.217）:
+# 変更点（1.219）:
 # - 魚眼ドリーの実位置を記録し、読込前に対象カメラのドリーを解除
 
 import os
@@ -587,5 +587,5 @@ def unregister_all_object_data():
 
 # -------------------------------
 # ファイル名：all_object_data.py
-# Version Footer: 1.217
+# Version Footer: 1.219
 # -------------------------------

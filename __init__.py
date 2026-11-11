@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.217）:
-# - 6桁PNGの一括読込と設定内の初期カメラ位置・回転を追加
+# 変更点（1.219）:
+# - 退避専用NLAにより保存ポーズの復元が阻害される問題を修正
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 217),
+    "version": (1, 0, 219),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -59,5 +59,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.217
+# Version Footer: 1.219
 # -------------------------------

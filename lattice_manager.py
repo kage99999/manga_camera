@@ -2,7 +2,7 @@
 # ファイル名：lattice_manager.py
 # 00漫画用Camera Position Manager
 # ラティス管理セクション
-# 変更点（1.217）:
+# 変更点（1.219）:
 # - シーン範囲の保護とストック復元時の更新集約
 
 import bpy
@@ -1765,5 +1765,5 @@ def unregister_lattice_manager():
 
 # -------------------------------
 # ファイル名：lattice_manager.py
-# Version Footer: 1.217
+# Version Footer: 1.219
 # -------------------------------
