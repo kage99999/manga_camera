@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Version: 1.219
+# Version: 1.220
 """Build background stocks without evaluating frames or changing the live scene."""
 
 import math
@@ -155,4 +155,4 @@ def unregister_properties():
             delattr(bpy.types.Scene, name)
 
 
-# Version Footer: 1.219
+# Version Footer: 1.220

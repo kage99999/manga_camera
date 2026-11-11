@@ -785,12 +785,13 @@ class SlotRegression(unittest.TestCase):
         for label, prop in (
                 ('スロット', 'mpm_stock_slot_name'),
                 ('下絵ﾌｧｲﾙ名', 'saved_camera_index')):
-            rows = [child for child in layout.children
-                    if any(label in nested.labels for nested in child.children)]
+            def has_label(cell):
+                return label in cell.labels or any(kw.get('text') == label for _, kw in cell.operators)
+            rows = [child for child in layout.children if any(has_label(nested) for nested in child.children)]
             self.assertEqual(len(rows), 1, label)
             self.assertNotIn('split_options', vars(rows[0]))
             self.assertTrue(any(prop in child.props for child in rows[0].walk()))
-            label_cell = next(child for child in rows[0].children if label in child.labels)
+            label_cell = next(child for child in rows[0].children if has_label(child))
             self.assertEqual(label_cell.alignment, 'LEFT')
         field = next(child for child in layout.walk() if 'mpm_stock_slot' in child.menus)
         self.assertEqual(field.emboss, 'NONE_OR_STATUS')

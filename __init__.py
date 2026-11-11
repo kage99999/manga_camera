@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.219）:
-# - 退避専用NLAにより保存ポーズの復元が阻害される問題を修正
+# 変更点（1.220）:
+# - 下絵ファイル名から名前変更できる操作を追加
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 219),
+    "version": (1, 0, 220),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -59,5 +59,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.219
+# Version Footer: 1.220
 # -------------------------------

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.219）:
+# 変更点（1.220）:
 # - 一括読込オペレーターと初期カメラ設定を登録
 
 import bpy
@@ -10,6 +10,7 @@ from . import fisheye_stock
 from . import slot_store
 from . import local_view
 from . import batch_import
+from . import background_rename
 import os
 import sys
 import time
@@ -69,7 +70,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 219)  # 1.219
+    v = (1, 0, 220)  # 1.220
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -2318,6 +2319,7 @@ CLASSES = (
     OBJECT_OT_set_camera_rotation_snap,
     OBJECT_OT_load_background_image,
     batch_import.OBJECT_OT_batch_load_background_images,
+    background_rename.MPM_OT_rename_background_stock,
     OBJECT_OT_reload_background_image,
     OBJECT_OT_open_output_folder,
     OBJECT_OT_set_output_folder,
@@ -2653,5 +2655,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.219
+# Version Footer: 1.220
 # -------------------------------

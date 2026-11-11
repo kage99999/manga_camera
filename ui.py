@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.219）:
+# 変更点（1.220）:
 # - 下絵読込・一括読込・再読込の3ボタンと一括読込初期値を表示
 
 import bpy
@@ -395,7 +395,7 @@ def _draw_record_read_controls(layout, context):
         row = layout.row(align=True)
         label = row.row(align=True)
         label.alignment = 'LEFT'
-        label.label(text="下絵ﾌｧｲﾙ名")
+        label.operator('camera.rename_background_stock', text="下絵ﾌｧｲﾙ名", emboss=False)
         field = row.row(align=True)
         ensure_valid_saved_enum(scene, manager)
         try:
@@ -1401,5 +1401,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.219
+# Version Footer: 1.220
 # -------------------------------
