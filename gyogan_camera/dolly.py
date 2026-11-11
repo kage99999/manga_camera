@@ -807,8 +807,10 @@ class GYOGAN_OT_dolly_restore(Operator):
 
 def draw(layout, context):
     settings = context.scene.gyogan_dolly
-    box = layout.box()
-    box.label(text='ドリーズーム', icon='CAMERA_DATA')
+    header, box = layout.panel('gyogan_dolly', default_closed=False)
+    header.label(text='ドリーズーム', icon='CAMERA_DATA')
+    if box is None:
+        return
     target = box.row()
     target.enabled = not settings.active
     target.prop(settings, 'target')

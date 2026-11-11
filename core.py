@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ファイル名：core.py
 # 00漫画用Camera Position Manager
-# 変更点（1.220）:
+# 変更点（1.223）:
 # - 一括読込オペレーターと初期カメラ設定を登録
 
 import bpy
@@ -70,7 +70,7 @@ from .storage import (
 # =========================
 def _addon_version_str() -> str:
     """アドオンのversionから '1.053' のような表記を作る"""
-    v = (1, 0, 220)  # 1.220
+    v = (1, 0, 223)  # 1.223
     try:
         a, b, c = int(v[0]), int(v[1]), int(v[2])
     except Exception:
@@ -2655,5 +2655,5 @@ if __name__ == "__main__":
 
 # -------------------------------
 # ファイル名：core.py
-# Version Footer: 1.220
+# Version Footer: 1.223
 # -------------------------------

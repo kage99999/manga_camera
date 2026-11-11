@@ -16,6 +16,7 @@ FIELDS = ('strength', 'fov', 'zoom', 'ellipse_x', 'ellipse_y', 'near_distance',
           'target_collection')
 POINTERS = ('center_object', 'target_collection')
 _busy = set()
+_enum_cache = {}
 
 
 def busy(scene):
@@ -102,20 +103,41 @@ def ensure(scene):
     active = _find(settings, settings.active_preset_id)
     with _batch(scene):
         if active is None:
-            # A stale identifier must not write live values into another preset.
-            active = settings.presets.add()
-            active.name = ('復元したプリセット' if len(settings.presets) > 1 else 'プリセット1')
-            active.uuid = uuid.uuid4().hex
-            _store(active, snapshot(scene))
-            settings.active_preset_id = active.uuid
-        settings.preset_index = _index(settings, active.uuid)
+            settings.active_preset_id = ''
+        settings.preset_index = _index(settings, active.uuid) if active else -1
     return active
 
 
 def save_active(scene):
-    active = ensure(scene)
-    _store(active, snapshot(scene))
-    return active
+    # Keep the old entry point for lifecycle callers, without rewriting snapshots.
+    return ensure(scene)
+
+
+def menu_items(settings, context):
+    key = settings.id_data.as_pointer()
+    items = [('NONE', '―', 'プリセット未適用', 0)] + [
+        (p.uuid, p.name, '登録済みの対象と魚眼設定を適用', i + 1)
+        for i, p in enumerate(settings.presets)]
+    if _enum_cache.get(key) != items:
+        _enum_cache[key] = items
+    return _enum_cache[key]
+
+
+def menu_get(settings):
+    active = _find(settings, settings.active_preset_id)
+    return _index(settings, active.uuid) + 1 if active else 0
+
+
+def menu_set(settings, value):
+    if value == 0:
+        with _batch(settings.id_data):
+            settings.active_preset_id = ''
+            settings.preset_index = -1
+        return
+    try:
+        activate(settings.id_data, settings.presets[value - 1].uuid)
+    except Exception as exc:
+        settings.preset_status = str(exc)
 
 
 def _validate(scene, state):
@@ -216,17 +238,12 @@ def activate(scene, preset_id):
     destination = _find(settings, preset_id)
     if destination is None:
         raise ValueError('切り替え先のプリセットがありません')
-    if destination.uuid == old.uuid:
-        with _batch(scene):
-            settings.preset_index = _index(settings, old.uuid)
-        return destination
     state = _validate(scene, _read(destination))
-    previous, old_id = snapshot(scene), old.uuid
+    previous, old_id = snapshot(scene), old.uuid if old else ''
     old_index = settings.active_index
     old_flags = {target.token: target.active for target in settings.targets}
     pending = settings.subdivision_pending
     status = settings.subdivision_status
-    _store(old, previous)
     try:
         with _batch(scene):
             _assign(scene, state)
@@ -237,7 +254,7 @@ def activate(scene, preset_id):
         with _batch(scene):
             _assign(scene, previous)
             settings.active_preset_id = old_id
-            settings.preset_index = _index(settings, old_id)
+            settings.preset_index = _index(settings, old_id) if old_id else -1
             settings.active_index = old_index
             settings.subdivision_pending = pending
             settings.subdivision_status = status
@@ -262,7 +279,7 @@ def update_index(settings, _context):
         activate(scene, settings.presets[requested].uuid)
     except Exception as exc:
         with _batch(scene):
-            settings.preset_index = _index(settings, settings.active_preset_id)
+            settings.preset_index = _index(settings, settings.active_preset_id) if settings.active_preset_id else -1
         settings.preset_status = str(exc)
 
 
@@ -276,17 +293,14 @@ def _unique_name(settings, base):
     return base + str(suffix)
 
 
-def create(scene, *, duplicate=False):
+def create(scene, *, duplicate=False, name=''):
     _check_editable(scene)
     old = save_active(scene)
     settings = scene.gyogan
-    state = snapshot(scene)
-    if not duplicate:
-        state['entries'] = []
-    name = (_unique_name(settings, old.name + ' の複製') if duplicate
-            else next('プリセット' + str(index) for index in range(1, len(settings.presets) + 2)
-                      if not any(preset.name == 'プリセット' + str(index)
-                                 for preset in settings.presets)))
+    if duplicate and old is None:
+        raise ValueError('複製するプリセットを選択してください')
+    state = _validate(scene, _read(old) if duplicate else snapshot(scene))
+    name = _unique_name(settings, name.strip() or (old.name + ' の複製' if duplicate else 'プリセット'))
     preset = settings.presets.add()
     preset.uuid, preset.name = uuid.uuid4().hex, name
     _store(preset, state)
@@ -302,31 +316,15 @@ def delete(scene):
     _check_editable(scene)
     settings = scene.gyogan
     current = ensure(scene)
+    if current is None:
+        raise ValueError('削除するプリセットを選択してください')
     current_id = current.uuid
-    index = _index(settings, current_id)
-    if len(settings.presets) == 1:
-        state = snapshot(scene)
-        state['entries'] = []
-        state['values']['effect_scope'] = 'MANUAL'
-        _validate(scene, state)
-        replacement = settings.presets.add()
-        replacement.uuid, replacement.name = uuid.uuid4().hex, 'プリセット1'
-        _store(replacement, state)
-        replacement_id = replacement.uuid
-        try:
-            replacement = activate(scene, replacement_id)
-        except Exception:
-            settings.presets.remove(_index(settings, replacement_id))
-            raise
-    else:
-        following = settings.presets[index - 1 if index else 1]
-        replacement = activate(scene, following.uuid)
-    replacement_id = replacement.uuid
     with _batch(scene):
         settings.presets.remove(_index(settings, current_id))
-        settings.preset_index = _index(settings, replacement_id)
+        settings.active_preset_id = ''
+        settings.preset_index = -1
     settings.preset_status = ''
-    return _find(settings, replacement_id)
+    return None
 
 
 class _PresetOperator:
@@ -350,17 +348,24 @@ class _PresetOperator:
 
 class GYOGAN_OT_preset_add(_PresetOperator, Operator):
     bl_idname = 'gyogan.preset_add'
-    bl_label = '新規'
-    bl_description = '現在の調整値を引き継ぎ、手動登録が空のプリセットを追加します'
+    bl_label = '登録'
+    bl_description = '現在の対象一覧と魚眼設定をプリセットへ登録します'
+    preset_name: StringProperty(name='プリセット名', default='プリセット')
+
+    def invoke(self, context, event):
+        self.preset_name = _unique_name(context.scene.gyogan, 'プリセット')
+        return context.window_manager.invoke_props_dialog(self)
 
     def perform(self, scene):
-        create(scene)
+        if not self.preset_name.strip():
+            raise ValueError('プリセット名を入力してください')
+        create(scene, name=self.preset_name)
 
 
 class GYOGAN_OT_preset_duplicate(_PresetOperator, Operator):
     bl_idname = 'gyogan.preset_duplicate'
     bl_label = '複製'
-    bl_description = '現在の登録対象と魚眼の設定を複製します'
+    bl_description = '選択中プリセットに保存された対象と魚眼設定を複製します'
 
     def perform(self, scene):
         create(scene, duplicate=True)
@@ -383,18 +388,18 @@ class GYOGAN_UL_presets(UIList):
 def draw(layout, context):
     from . import targets
     settings = context.scene.gyogan
-    box = layout.box()
+    header, box = layout.panel('gyogan_presets', default_closed=False)
+    header.label(text='対象と魚眼設定のプリセット', icon='PRESET')
+    if box is None:
+        return
     box.enabled = context.scene.as_pointer() not in targets._rendering
-    box.label(text='対象と魚眼設定のプリセット', icon='PRESET')
-    box.template_list('GYOGAN_UL_presets', '', settings, 'presets', settings,
-                      'preset_index', rows=2, maxrows=4)
-    active = _find(settings, settings.active_preset_id)
-    if active:
-        box.prop(active, 'name', text='名前')
     row = box.row(align=True)
     row.operator('gyogan.preset_add', icon='ADD')
     row.operator('gyogan.preset_duplicate', icon='DUPLICATE')
     row.operator('gyogan.preset_delete', icon='REMOVE')
+    box.prop(settings, 'preset_choice', text='適用プリセット')
+    box.template_list('GYOGAN_UL_presets', '', settings, 'presets', settings,
+                      'preset_index', rows=3, maxrows=6)
     if settings.preset_status:
         import textwrap
         for line in textwrap.wrap(settings.preset_status, width=26):
@@ -424,6 +429,7 @@ CLASSES = (GYOGAN_PresetEntry, GYOGAN_Preset, GYOGAN_OT_preset_add,
 
 def register():
     _busy.clear()
+    _enum_cache.clear()
     for name, callback in HANDLERS:
         handlers = getattr(bpy.app.handlers, name)
         if callback not in handlers:
@@ -436,3 +442,4 @@ def unregister():
         if callback in handlers:
             handlers.remove(callback)
     _busy.clear()
+    _enum_cache.clear()

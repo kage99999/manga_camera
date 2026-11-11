@@ -66,6 +66,39 @@ class FisheyeStock(FisheyeRegression):
         for actual, wanted in zip(self.vertices(obj), expected):
             self.near(actual, wanted)
 
+    def test_overlapping_targets_reuse_setup_without_mixing_stocks(self):
+        objects = [self.new_mesh('Overlap' + letter) for letter in 'ABCDE']
+        engine.setup_mesh(self.scene, objects[0])
+        self.settings.strength = .5
+        engine.targets.reconcile(self.scene)
+        bpy.context.view_layer.update()
+        first = self.item()
+        geometry_first = self.vertices(objects[0])
+        first_token = self.settings.targets[0].token
+        for obj in objects[1:]:
+            engine.setup_mesh(self.scene, obj)
+        self.settings.strength = 2.5
+        engine.targets.reconcile(self.scene)
+        bpy.context.view_layer.update()
+        second = self.item()
+        geometry_second = self.vertices(objects[0])
+        self.assertNotEqual(geometry_first, geometry_second)
+        preset_count = len(self.settings.presets)
+        for item, expected, names in (
+                (first, geometry_first, {objects[0].name}),
+                (second, geometry_second, {obj.name for obj in objects}),
+                (first, geometry_first, {objects[0].name})):
+            self.read(item)
+            self.assertEqual({t.source.name for t in self.settings.targets if t.active}, names)
+            self.assertEqual(next(t.token for t in self.settings.targets if t.source == objects[0]), first_token)
+            self.assertEqual(len(self.settings.presets), preset_count)
+            for actual, wanted in zip(self.vertices(objects[0]), expected):
+                self.near(actual, wanted)
+            for obj in objects[1:]:
+                if obj.name not in names:
+                    for actual, original in zip(self.vertices(obj), obj.data.vertices):
+                        self.near(actual, original.co)
+
     def test_duplicate_and_additional_overwrite_include_fisheye(self):
         self.assertEqual(bpy.ops.camera.save_position(), {'FINISHED'})
         first = copy.deepcopy(self.manager.saved_camera_data[0])

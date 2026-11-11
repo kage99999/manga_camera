@@ -89,7 +89,13 @@ class FisheyeRegression(base.Regression):
         self.assertEqual(cls.bl_order, 45)
         layout = base.Layout()
         fish.draw(layout, bpy.context)
-        self.assertIn(('gyogan.remove_all', {'icon': 'LOOP_BACK'}), layout.operators)
+        self.assertIn(('gyogan.remove_all', {'text': '全解除', 'icon': 'REMOVE'}), layout.operators)
+        self.assertNotIn('設定', layout.labels)
+        self.assertNotIn('プレビューをオフで元の形状に戻ります', layout.labels)
+        self.assertNotIn(self.settings.auto_status, layout.labels)
+        self.assertIn('短縮できる場合があります', ''.join(layout.labels))
+        self.assertEqual([label for label in layout.labels if label.startswith('ONにすると')],
+                         ['ONにすると、同じオブジェクトを再び魚眼化する際、プレビューまでの時間を短縮できる場合があります。'])
 
     def test_legacy_dolly_blocks_fisheye_without_partial_setup(self):
         self.scene.mpm_dolly_props.enabled = True

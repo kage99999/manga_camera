@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ファイル名：ui.py
 # 00漫画用Camera Position Manager
-# 変更点（1.220）:
+# 変更点（1.223）:
 # - 下絵読込・一括読込・再読込の3ボタンと一括読込初期値を表示
 
 import bpy
@@ -1401,5 +1401,5 @@ def unregister_ui():
 
 # -------------------------------
 # ファイル名：ui.py
-# Version Footer: 1.220
+# Version Footer: 1.223
 # -------------------------------

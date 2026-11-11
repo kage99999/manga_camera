@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ファイル名：xmp_rendering.py
 # 00漫画用Camera Position Manager
-# 変更点（1.220）:
+# 変更点（1.223）:
 # - 魚眼ドリーで表示されている位置と焦点距離をXMPへ反映
 
 import bpy
@@ -25,7 +25,7 @@ from . import fisheye
 # =========================
 # 定数
 # =========================
-ADDON_VERSION_STR = "1.220"
+ADDON_VERSION_STR = "1.223"
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _XMP_KEYWORD = "XML:com.adobe.xmp"
 _RENDER_OPERATOR_ID = "camera.render_with_xmp"
@@ -569,5 +569,5 @@ def unregister_xmp_rendering():
 
 # -------------------------------
 # ファイル名：xmp_rendering.py
-# Version Footer: 1.220
+# Version Footer: 1.223
 # -------------------------------

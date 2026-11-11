@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Manga Camera 1.220: portable fisheye stock settings and safe restoration.
+# Manga Camera 1.223: portable fisheye stock settings and safe restoration.
 """Serialize working settings, never generated geometry or Blender RNA pointers."""
 
 import json
@@ -221,7 +221,7 @@ def apply(scene, camera, plan):
     from mathutils import Vector
     from .gyogan_camera import presets, dolly, targets, cameras, sync_center_object, apply_enabled
     settings, controller = scene.gyogan, scene.gyogan_dolly
-    # Retain the previous preset's working values; never replace the preset library.
+    # Reconcile the preset selection without overwriting registered snapshots.
     presets.save_active(scene)
     with presets._batch(scene):
         presets._assign(scene, plan['resolved'])
@@ -257,4 +257,4 @@ def apply(scene, camera, plan):
     scene.update_tag()
 
 
-# Version Footer: 1.220
+# Version Footer: 1.223

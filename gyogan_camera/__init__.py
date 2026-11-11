@@ -331,9 +331,9 @@ def update_enabled(self, context):
 class GYOGAN_Settings(PropertyGroup):
     schema: IntProperty(default=1)
     keep_bounds_helpers: BoolProperty(
-        name='「魚眼・範囲判定」の補助オブジェクトを残す', default=True, options=set(),
+        name='魚眼レンズON時に作られる補助オブジェクトを残す', default=True, options=set(),
         update=targets.update_keep_helpers,
-        description='チェックを外すと、魚眼プレビューがOFFのときに範囲判定用の補助オブジェクトを削除します。次のONで必要に応じて再生成します')
+        description='範囲判定用の補助データを保持し、再利用できる場合は次回のプレビュー準備を短縮します。対象やモディファイアの変更によって再生成が必要になることがあります。プリセット登録は不要です。OFFではプレビューOFF時に範囲判定用の補助を削除しますが、変形用の設定は保持します')
     helper_collection: PointerProperty(type=bpy.types.Collection, options={'HIDDEN'})
     helper_collection_id: StringProperty(options={'HIDDEN'})
     scope_schema: IntProperty(default=0)
@@ -410,8 +410,10 @@ class GYOGAN_Settings(PropertyGroup):
     manual_targets: CollectionProperty(type=GYOGAN_ManualTarget)
     presets: CollectionProperty(type=presets.GYOGAN_Preset)
     active_preset_id: StringProperty(options={'HIDDEN'})
-    preset_index: IntProperty(default=0, min=0, options=set(),
+    preset_index: IntProperty(default=-1, min=-1, options=set(),
                               update=presets.update_index)
+    preset_choice: EnumProperty(name='適用プリセット', items=presets.menu_items,
+                                get=presets.menu_get, set=presets.menu_set, options=set())
     preset_status: StringProperty(options={'SKIP_SAVE'})
     active_index: IntProperty(default=0)
     status: StringProperty(default="対象を登録すると開始できます")
@@ -917,61 +919,52 @@ class GYOGAN_PT_main(Panel):
         if any(t.kind == 'ARMATURE' for t in settings.targets) or settings.mode == 'ARMATURE':
             col.prop(settings, "thickness")
         layout.operator("gyogan.reset_defaults", icon='LOOP_BACK')
-        box = layout.box()
-        box.label(text="変形する対象")
-        box.prop(settings, "effect_scope")
-        box.prop(settings, "mode")
-        if settings.effect_scope == 'MANUAL':
-            row = box.row(align=True)
-            row.use_property_split = False
-            row.use_property_decorate = False
-            row.prop_enum(settings, 'scope', 'SELECTED', text='選択から追加')
-            row.prop_enum(settings, 'scope', 'COLLECTION', text='コレクションから追加')
-            if settings.scope == 'COLLECTION':
-                box.prop(settings, "target_collection")
-        elif settings.effect_scope == 'CAMERA':
-            box.label(text="基準カメラに合わせて自動更新", icon='VIEW_CAMERA')
-            box.label(text="枠に一部が入る物体を対象にします")
-        else:
-            box.label(text="対応する物体すべてへ自動適用", icon='SCENE_DATA')
-        if settings.mode == 'MESH':
-            box.prop(settings, "subdivision")
-            if settings.subdivision != 'NONE':
-                box.prop(settings, "viewport_levels")
-                box.prop(settings, "render_levels")
-                box.prop(settings, "face_limit")
-        else:
-            box.label(text="通常ボーン・頂点ウェイトに対応", icon='INFO')
-        presets.draw(box, context)
-        if settings.effect_scope == 'MANUAL':
-            box.operator("gyogan.add_targets", icon='ADD')
-            layout.template_list("GYOGAN_UL_targets", "", settings, "manual_targets", settings, "active_index", rows=3)
-            row = layout.row()
-            row.enabled = bool(settings.manual_targets)
-            row.operator("gyogan.remove_target", icon='REMOVE')
-            layout.label(text=f"手動登録: {len(settings.manual_targets)} 件")
-        else:
-            layout.template_list("GYOGAN_UL_targets", "", settings, "targets", settings, "active_index", rows=3)
-            layout.label(text=f"現在の対象: {sum(t.active for t in settings.targets)} 件")
-            layout.label(text=f"保持している手動登録: {len(settings.manual_targets)} 件")
-        row = layout.row()
-        row.enabled = bool(settings.targets or settings.manual_targets)
-        row.operator("gyogan.remove_all", icon='LOOP_BACK')
-        options = layout.box()
+        header, box = layout.panel("gyogan_targets", default_closed=False)
+        header.label(text="変形する対象")
+        if box is not None:
+            box.prop(settings, "effect_scope")
+            box.prop(settings, "mode")
+            if settings.effect_scope == 'MANUAL':
+                row = box.row(align=True)
+                row.use_property_split = False
+                row.use_property_decorate = False
+                row.prop_enum(settings, 'scope', 'SELECTED', text='選択から追加')
+                row.prop_enum(settings, 'scope', 'COLLECTION', text='コレクションから追加')
+                if settings.scope == 'COLLECTION':
+                    box.prop(settings, "target_collection")
+            elif settings.effect_scope == 'CAMERA':
+                box.label(text="基準カメラに合わせて自動更新", icon='VIEW_CAMERA')
+                box.label(text="枠に一部が入る物体を対象にします")
+            else:
+                box.label(text="対応する物体すべてへ自動適用", icon='SCENE_DATA')
+            if settings.mode == 'MESH':
+                box.prop(settings, "subdivision")
+                if settings.subdivision != 'NONE':
+                    box.prop(settings, "viewport_levels")
+                    box.prop(settings, "render_levels")
+                    box.prop(settings, "face_limit")
+            else:
+                box.label(text="通常ボーン・頂点ウェイトに対応", icon='INFO')
+            if settings.effect_scope == 'MANUAL':
+                box.operator("gyogan.add_targets", icon='ADD')
+                row = box.row(align=True)
+                row.enabled = bool(settings.manual_targets)
+                row.operator("gyogan.remove_target", text="選択解除", icon='REMOVE')
+                row.operator("gyogan.remove_all", text="全解除", icon='REMOVE')
+                box.template_list("GYOGAN_UL_targets", "", settings, "manual_targets", settings, "active_index", rows=3)
+                box.label(text=f"手動登録: {len(settings.manual_targets)} 件")
+            else:
+                box.operator("gyogan.remove_all", text="全解除", icon='REMOVE')
+                box.template_list("GYOGAN_UL_targets", "", settings, "targets", settings, "active_index", rows=3)
+                box.label(text=f"現在の対象: {sum(t.active for t in settings.targets)} 件")
+                box.label(text=f"保持している手動登録: {len(settings.manual_targets)} 件")
+        presets.draw(layout, context)
+        options = layout.box().column(align=True)
         options.use_property_split = False
         options.use_property_decorate = False
-        options.label(text='設定', icon='PREFERENCES')
         options.prop(settings, 'keep_bounds_helpers')
-        options.label(text='※OFFにするとON時の待ち時間が増えます')
-        # Reports carry full errors; panel gives readable wrapped status.
-        import textwrap
-        messages = [settings.auto_status, settings.subdivision_status]
-        if settings.effect_scope == 'MANUAL':
-            messages.append(settings.status)
-        for status in dict.fromkeys(message for message in messages if message):
-            for line in textwrap.wrap(status, width=26):
-                layout.label(text=line)
-        layout.label(text="プレビューをオフで元の形状に戻ります", icon='INFO')
+        description = 'ONにすると、同じオブジェクトを再び魚眼化する際、プレビューまでの時間を短縮できる場合があります。'
+        options.label(text=description)
 
 
 def upgrade_saved_warps(scene):
