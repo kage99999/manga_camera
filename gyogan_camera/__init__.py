@@ -34,7 +34,7 @@ def center_error(scene, obj, pending_mesh=None):
         return None
     if obj.name not in scene.objects:
         return "魚眼の中心は、このシーンのオブジェクトを指定してください"
-    deformed = {t.source for t in scene.gyogan.targets if t.kind == 'MESH' and t.source}
+    deformed = {t.source for t in scene.gyogan.targets if t.kind in {'MESH', 'CURVE'} and t.source}
     if pending_mesh is not None:
         deformed.add(pending_mesh)
     # A rig's object origin does not depend on every pose bone. Track pose
@@ -267,7 +267,7 @@ def apply_enabled(scene):
 
     for target in settings.targets:
         enabled = global_enabled and target.active
-        if target.kind == 'MESH':
+        if target.kind in {'MESH', 'CURVE'}:
             for record in target.modifiers:
                 modifier = find_modifier(target.source, record)
                 if modifier:
@@ -366,7 +366,7 @@ class GYOGAN_Settings(PropertyGroup):
     center_use_object: BoolProperty(get=lambda self: self.center_mode == 'OBJECT',
                                options={'HIDDEN'})
     mode: EnumProperty(name="モード", items=[
-        ('MESH', "メッシュ", "頂点を直接、非破壊で魚眼変形"),
+        ('MESH', "メッシュ・カーブ", "メッシュとカーブを非破壊で魚眼変形"),
         ('ARMATURE', "アーマチュア", "別の出力リグを伸縮しウェイト付きメッシュを変形")],
         update=targets.update_scope)
     scope: EnumProperty(name="登録元", items=[
@@ -556,6 +556,41 @@ def setup_mesh(scene, obj, *, manual=True):
         raise
 
 
+def setup_curve(scene, obj, *, manual=True):
+    migrate_targets(scene)
+    existing = next((t for t in scene.gyogan.targets
+                     if t.source == obj and t.kind == 'CURVE'), None)
+    if existing:
+        if manual:
+            remember_manual(scene, obj, 'CURVE')
+        return existing
+    if obj.type != 'CURVE' or obj.library or obj.override_library or obj.data.library:
+        raise ValueError('編集可能なカーブが必要です')
+    if len(obj.users_scene) > 1 or abs(obj.matrix_world.determinant()) < 1e-12:
+        raise ValueError('複数シーン共有またはスケールゼロのカーブは対象外です')
+    error = center_error(scene, active_center_object(scene.gyogan), pending_mesh=obj)
+    if error:
+        raise ValueError(error)
+    target = scene.gyogan.targets.add()
+    target.source, target.kind, target.token = obj, 'CURVE', uuid.uuid4().hex
+    index = len(scene.gyogan.targets) - 1
+    try:
+        group = nodes.build_mesh_group('魚眼・' + obj.name, scene)
+        group[OWNER] = target.token
+        target.node_group = group
+        modifier = obj.modifiers.new('魚眼・変形', 'NODES')
+        record_modifier(target, modifier)
+        modifier.node_group = group
+        modifier.show_in_editmode = False
+        apply_enabled(scene)
+        if manual:
+            remember_manual(scene, obj, 'CURVE')
+        return target
+    except Exception:
+        remove_target(scene, index, forget=False)
+        raise
+
+
 def setup_armature(scene, rig, *, manual=True):
     migrate_targets(scene)
     existing = next((t for t in scene.gyogan.targets
@@ -675,7 +710,7 @@ def collect_candidates(context):
                 rigs.update(m.object for m in obj.modifiers if m.type == 'ARMATURE' and m.object)
         candidates = list(rigs)
     else:
-        candidates = [o for o in candidates if o.type == 'MESH']
+        candidates = [o for o in candidates if o.type in {'MESH', 'CURVE'}]
     if settings.scope == 'CAMERA':
         if settings.mode == 'ARMATURE':
             candidates = [r for r in candidates if any(
@@ -719,7 +754,7 @@ class GYOGAN_OT_add(Operator):
         for obj in candidates:
             try:
                 if settings.mode == 'MESH':
-                    setup_mesh(scene, obj)
+                    (setup_curve if obj.type == 'CURVE' else setup_mesh)(scene, obj)
                 else:
                     setup_armature(scene, obj)
                 count += 1
@@ -861,7 +896,7 @@ class GYOGAN_UL_targets(UIList):
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         layout.label(text=item.source.name if item.source else "元オブジェクトがありません",
-                     icon='ARMATURE_DATA' if item.kind == 'ARMATURE' else 'MESH_DATA')
+                     icon={'ARMATURE': 'ARMATURE_DATA', 'CURVE': 'CURVE_DATA'}.get(item.kind, 'MESH_DATA'))
 
 
 class GYOGAN_PT_main(Panel):

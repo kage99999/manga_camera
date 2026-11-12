@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Manga Camera 1.223: portable fisheye stock settings and safe restoration.
+# Manga Camera 1.225: portable fisheye stock settings and safe restoration.
 """Serialize working settings, never generated geometry or Blender RNA pointers."""
 
 import json
@@ -79,7 +79,7 @@ def normalize(state):
         raise ValueError('魚眼記録の対象一覧が不正です')
     unique = set()
     for item in entries:
-        if not isinstance(item, dict) or item.get('kind') not in ('MESH', 'ARMATURE'):
+        if not isinstance(item, dict) or item.get('kind') not in ('MESH', 'CURVE', 'ARMATURE'):
             raise ValueError('魚眼記録の対象が不正です')
         name = _name(item.get('name'))
         if not name:
@@ -257,4 +257,4 @@ def apply(scene, camera, plan):
     scene.update_tag()
 
 
-# Version Footer: 1.223
+# Version Footer: 1.225

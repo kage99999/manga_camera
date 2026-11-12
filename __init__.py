@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ファイル名：__init__.py
 # 00漫画用Camera Position Manager
-# 変更点（1.223）:
-# - 魚眼の補助保持欄の行間を詰めて説明を1行表示に変更
+# 変更点（1.225）:
+# - 魚眼ドリーをOFFにすると開始前のカメラに戻しドライバーを解除
 
 bl_info = {
     "name": "00漫画用Camera Position Manager",
-    "version": (1, 0, 223),
+    "version": (1, 0, 225),
     "blender": (2, 80, 0),
     "category": "Object",
 }
@@ -59,5 +59,5 @@ def unregister():
 
 # -------------------------------
 # ファイル名：__init__.py
-# Version Footer: 1.223
+# Version Footer: 1.225
 # -------------------------------

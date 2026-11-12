@@ -162,7 +162,7 @@ def _safe_to_prepare(scene):
     # out of Edit/Pose/Sculpt Mode to make automatic preparation possible.
     return (getattr(bpy.context, 'mode', 'OBJECT') == 'OBJECT'
             and all(obj.mode == 'OBJECT' for obj in scene.objects
-                    if obj.type in {'MESH', 'ARMATURE'} and not obj.get(OWNER)))
+                    if obj.type in {'MESH', 'CURVE', 'ARMATURE'} and not obj.get(OWNER)))
 
 
 def _identity(value):
@@ -358,7 +358,7 @@ def _bounds_signature(source, modifiers):
 
 def _restored_bounds_match(source, proxy, signature):
     """Revalidate restored data, not pre-Undo RNA handles or pointer caches."""
-    if proxy.type != 'MESH' or proxy.data != source.data:
+    if proxy.type != source.type or proxy.data != source.data:
         return False
     constraints = list(proxy.constraints)
     if (len(constraints) != 1 or constraints[0].type != 'COPY_TRANSFORMS'
@@ -390,7 +390,7 @@ def ensure_bounds_proxy(scene, target):
     object's modifiers/constraints are changed. A world transform constraint
     follows the original, including parents, animation and interactive motion.
     """
-    if target.kind != 'MESH' or not target.source:
+    if target.kind not in {'MESH', 'CURVE'} or not target.source:
         return None
     source = target.source
     original_modifiers = _source_modifiers(target)
@@ -474,9 +474,9 @@ def _skin_cache_valid(scene, target):
 
 def _candidates(scene):
     kind = scene.gyogan.mode
-    object_type = 'ARMATURE' if kind == 'ARMATURE' else 'MESH'
-    return [(kind, obj) for obj in scene.objects
-            if obj.type == object_type and not obj.get(OWNER)]
+    object_types = {'ARMATURE'} if kind == 'ARMATURE' else {'MESH', 'CURVE'}
+    return [(obj.type, obj) for obj in scene.objects
+            if obj.type in object_types and not obj.get(OWNER)]
 
 
 def _target_key(kind, source):
@@ -536,10 +536,10 @@ def _in_frame(scene, kind, source, cached, depsgraph):
 def _failure_signature(scene, kind, source):
     settings = scene.gyogan
     data = source.data
-    geometry = (len(data.polygons) if kind == 'MESH' else
+    geometry = (len(data.polygons) if kind == 'MESH' else len(data.splines) if kind == 'CURVE' else
                 tuple((bone.name, bone.use_deform, bone.bbone_segments)
                       for bone in data.bones))
-    meshes = [source] if kind == 'MESH' else _skin_meshes(scene, source)
+    meshes = [source] if kind in {'MESH', 'CURVE'} else _skin_meshes(scene, source)
     return (data.as_pointer(), geometry, _identity(source.library),
             bool(source.override_library),
             len(source.users_scene), source.mode,
@@ -556,6 +556,8 @@ def _failure_signature(scene, kind, source):
 
 def _conflicts(scene, cached, kind, source):
     if cached.kind == kind and cached.source == source:
+        return False
+    if kind == 'CURVE':
         return False
     if kind == 'MESH':
         return cached.kind == 'ARMATURE' and any(
@@ -581,7 +583,7 @@ def reconcile(scene, *, prepare=True, depsgraph=None, preflight=False):
         return
     _busy.add(key)
     try:
-        from . import apply_enabled, setup_mesh, setup_armature, remove_target, subdivision
+        from . import apply_enabled, setup_mesh, setup_curve, setup_armature, remove_target, subdivision
         settings = scene.gyogan
         _dirty.discard(key)
         if _unused(scene):
@@ -646,7 +648,7 @@ def reconcile(scene, *, prepare=True, depsgraph=None, preflight=False):
         # after the addon modifier must never drive their own membership.
         if settings.effect_scope == 'CAMERA' and can_prepare:
             for target in settings.targets:
-                if target.kind == 'MESH' and target.source:
+                if target.kind in {'MESH', 'CURVE'} and target.source:
                     ensure_bounds_proxy(scene, target)
                 elif target.kind == 'ARMATURE' and target.source:
                     _ensure_skin_evaluators(target)
@@ -705,11 +707,11 @@ def reconcile(scene, *, prepare=True, depsgraph=None, preflight=False):
                 layer = (bpy.context.view_layer if bpy.context.scene == scene
                          else scene.view_layers[0])
                 with bpy.context.temp_override(scene=scene, view_layer=layer):
-                    target = (setup_mesh(scene, source, manual=False) if kind == 'MESH'
-                              else setup_armature(scene, source, manual=False))
+                    setup = {'MESH': setup_mesh, 'CURVE': setup_curve, 'ARMATURE': setup_armature}[kind]
+                    target = setup(scene, source, manual=False)
                 new_token = target.token
                 target.active = item_key in desired
-                if settings.effect_scope == 'CAMERA' and kind == 'MESH':
+                if settings.effect_scope == 'CAMERA' and kind in {'MESH', 'CURVE'}:
                     ensure_bounds_proxy(scene, target)
                 elif settings.effect_scope == 'CAMERA' and kind == 'ARMATURE':
                     _ensure_skin_evaluators(target)

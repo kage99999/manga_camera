@@ -772,8 +772,8 @@ class GYOGAN_OT_dolly_start(Operator):
 class GYOGAN_OT_dolly_toggle(Operator):
     bl_idname = 'gyogan.dolly_toggle'
     bl_label = 'ドリーズームを切り替え'
-    bl_description = ('初回のオンで現在のカメラと被写体の基準を自動保存します。'
-                      'オフで倍率1へ戻し、再度オンにすると前の倍率で再開します')
+    bl_description = ('オンで現在のカメラと被写体の基準を保存します。'
+                      'オフでドライバーを解除し、開始前のカメラに戻します')
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
@@ -781,9 +781,13 @@ class GYOGAN_OT_dolly_toggle(Operator):
         settings = scene.gyogan_dolly
         if not settings.active:
             return GYOGAN_OT_dolly_start.execute(self, context)
-        settings.enabled = not settings.enabled
-        settings.status = ('ドリーズームをオンにしました。前の倍率で再開します'
-                           if settings.enabled else 'ドリーズームをオフにしました。倍率と基準は保持しています')
+        if settings.enabled:
+            warnings = restore(scene)
+            self.report({'WARNING'} if warnings else {'INFO'}, settings.status)
+            return {'FINISHED'}
+        # Files saved with an older version may contain a paused dolly setup.
+        settings.enabled = True
+        settings.status = 'ドリーズームをオンにしました。前の倍率で再開します'
         scene.update_tag()
         self.report({'INFO'}, settings.status)
         return {'FINISHED'}

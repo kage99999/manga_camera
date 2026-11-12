@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Version: 1.223
+# Version: 1.225
 """Per-viewport local-view snapshots and a non-rendering camera warning."""
 
 import bpy
@@ -56,7 +56,7 @@ def capture_fields(context, enabled):
 
 
 def record_enabled(data):
-    # Before 1.223, local-view recording shared the view-layer flag.
+    # Before 1.225, local-view recording shared the view-layer flag.
     return bool(data.get('record_local_view_state',
                          data.get('record_view_layer_exclude_state', False) and 'local_view_state' in data))
 
@@ -195,4 +195,4 @@ def unregister():
                 area.tag_redraw()
 
 
-# Version Footer: 1.223
+# Version Footer: 1.225

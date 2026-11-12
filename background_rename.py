@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Version: 1.223
+# Version: 1.225
 """Rename one stock label or a background and its current-slot references."""
 
 import copy
@@ -156,4 +156,4 @@ class MPM_OT_rename_background_stock(bpy.types.Operator):
         return {'FINISHED'}
 
 
-# Version Footer: 1.223
+# Version Footer: 1.225

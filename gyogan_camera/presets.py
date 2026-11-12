@@ -170,7 +170,7 @@ def _validate(scene, state):
         # Deleted objects leave null ID pointers, including in inactive presets.
         if source is None:
             continue
-        if (kind not in {'MESH', 'ARMATURE'} or source.type != kind
+        if (kind not in {'MESH', 'CURVE', 'ARMATURE'} or source.type != kind
                 or source.name not in scene.objects or source.get(OWNER)):
             raise ValueError('プリセットの登録対象を使用できません：' + source.name)
         key = source.as_pointer(), kind
@@ -185,9 +185,9 @@ def _validate(scene, state):
     center = state['center_object'] if values['center_mode'] == 'OBJECT' else None
     error = center_error(scene, center)
     if not error:
-        pending_meshes = ([source for source, kind in entries if kind == 'MESH']
+        pending_meshes = ([source for source, kind in entries if kind in {'MESH', 'CURVE'}]
                           if values['effect_scope'] == 'MANUAL' else
-                          [obj for obj in scene.objects if obj.type == 'MESH' and not obj.get(OWNER)]
+                          [obj for obj in scene.objects if obj.type in {'MESH', 'CURVE'} and not obj.get(OWNER)]
                           if values['mode'] == 'MESH' else [])
         for source in pending_meshes:
             error = center_error(scene, center, pending_mesh=source)

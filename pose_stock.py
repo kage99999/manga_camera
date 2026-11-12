@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Version: 1.223
+# Version: 1.225
 """Pose snapshots with selectable keyframe priority for camera stocks."""
 
 import json
@@ -264,4 +264,4 @@ def current_pose_records(scene, item):
 
 
 
-# Version Footer: 1.223
+# Version Footer: 1.225
